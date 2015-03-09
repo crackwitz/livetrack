@@ -78,7 +78,10 @@ class VideoSource(object):
 		start = min(requested)
 		stop = max(requested)+1
 		requested = range(start, stop)
-		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
+		vidpos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
+		if start != vidpos:
+			print "cache_range: seeking from {0} to {1}".format(vidpos, start)
+			self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
 		for i in requested:
 			if i in self.cache:
 				rv = self.vid.grab()
@@ -164,7 +167,9 @@ def redraw_display():
 
 
 	# anchor is animated
-	(ax,ay) = anchor
+	(ax, ay) = anchor
+	(axi, ayi) = map(iround, anchor)
+
 	ay = meta['anchor'][1]
 	Anchor = np.matrix([
 		[1, 0, -ax],
@@ -194,6 +199,15 @@ def redraw_display():
 	if draw_output:
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
 		
+		if 0:
+			t0 = time.clock()
+			keyframed = set((np.array(keyframes.keys()) * screenw / totalframes).astype(np.int32))
+			for x in keyframed:
+				cv2.line(surface,
+					(x, 0), (x, 20), (255,255,255), thickness=1)
+			t1 = time.clock()
+			#print "keyframed {0:.3f}".format(t1-t0)
+		
 		cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
 
 		cv2.line(surface,
@@ -211,12 +225,12 @@ def redraw_display():
 	source = curframe.copy()
 	
 	cv2.line(source,
-		(anchor[0]-10, anchor[1]-10),
-		(anchor[0]+10, anchor[1]+10), 
+		(axi-10, ayi-10),
+		(axi+10, ayi+10), 
 		cursorcolor,  thickness=2)
 	cv2.line(source,
-		(anchor[0]+10, anchor[1]-10),
-		(anchor[0]-10, anchor[1]+10), 
+		(axi+10, ayi-10),
+		(axi-10, ayi+10), 
 		cursorcolor,  thickness=2)
 	
 	# todo: transform using inverse M
@@ -230,6 +244,19 @@ def redraw_display():
 		TL, BR,
 		(255, 0, 0), thickness=2)
 
+	secs = src.index / framerate
+	hours, secs = divmod(secs, 3600)
+	mins, secs = divmod(secs, 60)
+	cv2.rectangle(source,
+		(0, screenh), (screenw, screenh-70),
+		(0,0,0),
+		cv2.cv.CV_FILLED
+		)
+	text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
+	cv2.putText(source,
+		text,
+		(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
+	
 	cv2.imshow("source", source)
 	
 	if draw_graph:
@@ -268,11 +295,11 @@ def redraw_display():
 			
 			if shift > 0:
 				#import pdb; pdb.set_trace()
-				newindices = xrange(imax, imax-shift, -1)
+				newindices = xrange(imax, imax-ashift, -1)
 				graphbg_indices = set(i for i in graphbg_indices if i > imin)
 			elif shift < 0:
 				#import pdb; pdb.set_trace()
-				newindices = xrange(imin-shift, imin, -1)
+				newindices = xrange(imin+ashift, imin, -1)
 				graphbg_indices = set(i for i in graphbg_indices if i <= imax)
 			
 			t2 = time.clock()
@@ -301,10 +328,10 @@ def redraw_display():
 		
 		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
 
+		lineindices = [i for i in range(imin, imax+1) if i in keyframes]
 		lines = np.array([
 			( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
-			for index in xrange(imin, imax+1)
-			if index in keyframes
+			for index in lineindices
 		], dtype=np.int32)
 
 		now = iround((imax - src.index) * graphscale / framerate)
@@ -319,13 +346,36 @@ def redraw_display():
 				(255, 255, 0),
 				thickness=2
 			)
-			for pos in lines:
+			for i,pos in zip(lineindices,lines):
 				x,y = pos
+				
+				spread = 10 # todo: some way to tell if this was raw or smoothed
+				
+				thickness = 1
+				color = (0, 255, 255)
+				if graphsmooth_start is not None:
+					if graphsmooth_start <= i <= graphsmooth_stop:
+						thickness = 3
+						color = (255,255,255)
+					
 				cv2.line(
 					graph,
-					(x-10, y), (x+10, y),
-					(0, 255, 255),
-					thickness=1)
+					(x-spread, y), (x+spread, y),
+					color,
+					thickness=thickness)
+
+		secs = src.index / framerate
+		hours, secs = divmod(secs, 3600)
+		mins, secs = divmod(secs, 60)
+		#cv2.rectangle(graph,
+		#	(0, screenh), (screenw, screenh-70),
+		#	(0,0,0),
+		#	cv2.cv.CV_FILLED
+		#	)
+		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
+		cv2.putText(graph,
+			text,
+			(10, graphheight-10), cv2.FONT_HERSHEY_PLAIN, 4, (0,0,255), 3)
 
 		cv2.imshow("graph", graph)
 
@@ -356,39 +406,73 @@ def onmouse_output(event, x, y, flags, userdata):
 	if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 		newindex = iround(totalframes * x / screenw)
 		curframe = src.read(newindex)
-		if mousedown:
-			keyframes[src.index] = anchor
-		else:
-			#anchor = keyframes.get(src.index, anchor)
-			anchor = get_keyframe(src.index)
+		print "frame", src.index
+		assert not mousedown
+		#keyframes[src.index] = anchor
+		anchor = get_keyframe(src.index)
 		redraw = True
 
 def onmouse_graph(event, x, y, flags, userdata):
 	global redraw, curframe, anchor
 	
-	delta = (graphdepth/2 - y / graphscale) * framerate
-	newindex = iround(src.index + delta)
+	curindex = graphbg_head - iround(y / graphscale * framerate)
+
+#	delta = (graphdepth/2 - y / graphscale) * framerate
+#	newindex = iround(src.index + delta)
 	
-	
-	if graphdraw:
+	if graphsmoothing:
+		global graphsmooth_start, graphsmooth_stop
+		
+		# implement some selection dragging
+		if (event == cv2.EVENT_LBUTTONDOWN):
+			graphsmooth_start = curindex
+			graphsmooth_stop = curindex
+			redraw = True
+		
+		elif (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
+			graphsmooth_stop = curindex
+			redraw = True
+			
+		elif (event == cv2.EVENT_LBUTTONUP):
+			graphsmooth_stop = curindex
+			redraw = True
+			
+			indices = range(graphsmooth_start, graphsmooth_stop+1)
+			
+			# prepare to undo this
+			oldkeyframes = {i: keyframes[i] for i in indices if i in keyframes}
+			def undo():
+				for i in indices: del keyframes[i]
+				keyframes.update(oldkeyframes)
+			undoqueue.append(undo)
+			
+			support = 2
+			support = range(-support, +support+1)
+			
+			#import pdb; pdb.set_trace()
+			keyframes.update({
+				i: (np.sum([get_keyframe(i+j) for j in support], axis=0, dtype=np.float32) / len(support)).tolist()
+				for i in indices
+			})
+			
+			graphsmooth_start = None
+			#graphsmoothing = False
+
+	elif graphdraw:
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 			(ax,ay) = get_keyframe(src.index)
 			ax = x
-			keyframes[newindex] = (ax, ay)
+			keyframes[curindex] = (ax, ay)
 			redraw = True
 
 	else:
 		if (event == cv2.EVENT_LBUTTONDOWN):
-			curframe = src.read(newindex)
-			if mousedown:
-				keyframes[src.index] = anchor
-			else:
-				#anchor = keyframes.get(src.index, anchor)
-				anchor = get_keyframe(src.index)
+			curframe = src.read(curindex) # sets src.index
+			print "frame", src.index
+			assert not mousedown
+			#keyframes[src.index] = anchor
+			anchor = get_keyframe(src.index)
 			redraw = True
-		else:
-			pass
-			#print "graph", event, (x,y), flags
 	
 def set_cursor(x, y):
 	global anchor, redraw
@@ -397,8 +481,11 @@ def set_cursor(x, y):
 	redraw = True
 
 def save():
-	json.dump(meta, open(metafile, "w"), indent=2, sort_keys=True)
-	json.dump(keyframes, open(meta['keyframes'], 'w'), indent=2, sort_keys=True)
+	output = json.dumps(meta, indent=2, sort_keys=True)
+	open(metafile, "w").write(output)
+	
+	output = json.dumps(keyframes, indent=2, sort_keys=True)
+	open(meta['keyframes'], 'w').write(output)
 
 def get_keyframe(index):
 	if index in keyframes:
@@ -430,7 +517,12 @@ draw_graph = True
 graphbg = None
 graphbg_head = None
 graphbg_indices = set()
+
 graphdraw = False
+
+graphsmoothing = False
+graphsmooth_start = None
+graphsmooth_stop = None
 
 graphdepth = 5.0
 graphscale = 150 # pixels per second
@@ -438,6 +530,7 @@ graphscale = 150 # pixels per second
 
 graphheight = iround(graphdepth * graphscale)
 
+undoqueue = []
 
 if __name__ == '__main__':
 	metafile = sys.argv[1]
@@ -483,10 +576,11 @@ if __name__ == '__main__':
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
 	graphslices = iround(graphdepth * framerate)
-	src = VideoSource(srcvid, numcache=graphslices)
-
+	src = VideoSource(srcvid, numcache=200)
+	
 	firstpos = max(keyframes)
 	curframe = src.read(firstpos)
+	print "frame", src.index
 	
 	try:
 		cv2.namedWindow("source", cv2.WINDOW_NORMAL)
@@ -525,6 +619,7 @@ if __name__ == '__main__':
 
 				newindex = src.index + sgn(playspeed)
 				curframe = src.read(newindex)
+				print "frame", src.index
 				assert curframe is not None
 				redraw = True
 
@@ -546,12 +641,13 @@ if __name__ == '__main__':
 				running = False
 				break
 
-			print "key", key
+			#print "key", key
 
 			if key in (VK_LEFT, VK_PGUP):
 				delta = 1
 				if key == VK_PGUP: delta = 25
 				curframe = src.read(src.index - delta)
+				print "frame", src.index
 				assert curframe is not None
 
 				if mousedown:
@@ -564,8 +660,11 @@ if __name__ == '__main__':
 
 			if key in (VK_RIGHT, VK_PGDN):
 				delta = 1
-				if key == VK_PGDN: delta = 25
+				if key == VK_PGDN:
+					delta = 25
+					src.cache_range(src.index, src.index+delta+1)
 				curframe = src.read(src.index + delta)
+				print "frame", src.index
 				assert curframe is not None
 
 				if mousedown:
@@ -609,13 +708,27 @@ if __name__ == '__main__':
 				graphdraw = not graphdraw
 				print "graphdraw", graphdraw
 			
+			if key == ord('a'):
+				graphsmoothing = not graphsmoothing
+				print "graph smoothing", graphsmoothing
+			
+			if key == 26: # ctrl-z
+				if undoqueue:
+					print "undoing..."
+					item = undoqueue.pop()
+					item()
+					print "undone"
+					redraw = True
+				else:
+					print "nothing to be undone"
+			
 			if key == ord('l'):
-				playspeed += 0.2
+				playspeed += 0.5
 				print "speed: {0}".format(playspeed)
 				sched = time.clock()
 
 			if key == ord('j'):
-				playspeed -= 0.2
+				playspeed -= 0.5
 				print "speed: {0}".format(playspeed)
 				sched = time.clock()
 
