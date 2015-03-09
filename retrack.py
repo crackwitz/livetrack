@@ -67,10 +67,23 @@ class VideoSource(object):
 		self.index = -1 # just for relative addressing
 		self.numcache = numcache
 		self.numstep = numstep
-		self.cache = {} # index -> (rv,frame)
-		self.stripes = {} # index -> row
+		self.cache = {} # index -> frame
+		#self.stripes = {} # index -> row
 		self.mru = [] # oldest -> newest
 	
+	def cache_range(self, start, stop):
+		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
+		requested = range(start, stop)
+		for i in requested:
+			if i in self.cache:
+				rv = self.vid.grab()
+			else:
+				(rv, frame) = self.vid.read()
+				if rv:
+					self.cache[i] = frame
+		
+		self.mru = [i for i in self.mru if i not in requested] + requested
+
 	def _prefetch(self, newindex):
 		rel = newindex - self.index
 
@@ -83,13 +96,14 @@ class VideoSource(object):
 				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex-self.numstep)
 				for i in upcoming:
 					if i in self.cache:
-						print "grabbing frame {0}".format(i)
+						#print "grabbing frame {0}".format(i)
 						self.vid.grab()
 					else:
-						print "reading frame {0}".format(i)
-						(rv, frame) = self.cache[i] = self.vid.read()
+						#print "reading frame {0}".format(i)
+						(rv, frame) = self.vid.read()
 						if rv:
-							self.stripes[i] = getslice(frame, keyframes.get(i, None))
+							self.cache[i] = frame
+							#self.stripes[i] = getslice(frame, keyframes.get(i, None))
 				
 				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
 		
@@ -100,14 +114,17 @@ class VideoSource(object):
 				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex)
 			
 			print "reading frame {0}".format(newindex)
-			(rv,frame) = self.cache[newindex] = self.vid.read()
-			self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
+			(rv,frame) = self.vid.read()
+			if rv:
+				self.cache[newindex] = frame
+				#self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
 			
 			self.mru = [i for i in self.mru if i != newindex] + [newindex]
 		
+		
 		self.mru = self.mru[-self.numcache:]
-		self.cache = {i: self.cache[i] for i in self.mru}
-		self.stripes = {i: self.stripes[i] for i in self.mru}
+		self.cache = { i: frame for i,frame in self.cache.iteritems() if i in self.mru }
+		#self.stripes = {i: self.stripes[i] for i in self.mru}
 			
 	def read(self, newindex=None):
 		if newindex is None:
@@ -131,6 +148,7 @@ def sgn(x):
 	return (x > 0) - (x < 0)
 
 def redraw_display():
+	print "redraw"
 	if mousedown:
 		cursorcolor = (255, 0, 0)
 	else:
@@ -206,45 +224,54 @@ def redraw_display():
 
 	cv2.imshow("source", source)
 	
-	imin = iround(src.index - graphdepth/2 * framerate)
-	imax = iround(src.index + graphdepth/2 * framerate)
-	
-	graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
-#	graph = np.array([
-#		src.stripes[i] if i in src.stripes else ([(0,0,0)] * 1920)
-#		for i in reversed(xrange(imin, imax+1))
-#	], dtype=np.uint8)
-	
-	graph = cv2.resize(graph, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
-	print graph.dtype
-	
-	lines = np.array([
-		( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
-		for index in xrange(imin, imax+1)
-		if index in keyframes
-	], dtype=np.int32)
-	
-	now = iround((imax - src.index) * graphscale / framerate)
-	cv2.line(graph,
-		(0, now), (screenw, now), (255, 255, 255), thickness=2)
-	
-	if lines.shape[0] > 0:
-		cv2.polylines(
-			graph,
-			[lines],
-			False,
-			(255, 255, 0),
-			thickness=2
-		)
-		for pos in lines:
-			x,y = pos
-			cv2.line(
-				graph,
-				(x-10, y), (x+10, y),
-				(0, 255, 255),
-				thickness=1)
+	if draw_graph:
+		imin = iround(src.index - graphdepth/2 * framerate)
+		imax = iround(src.index + graphdepth/2 * framerate)
+
+		if 0:	
+			graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
+
+		else:
+			if graphbg_index != src.index:
+				global graphbg, graphbg_index
 			
-	cv2.imshow("graph", graph)
+				emptyrow = np.uint8([(0,0,0)] * 1920)
+				graphbg = np.array([
+					src.cache[i][ay] if i in src.cache else emptyrow
+					for i in reversed(xrange(imin, imax+1))
+				], dtype=np.uint8)
+				graphbg = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
+				graphbg_index = src.index
+
+			graph = graphbg.copy()
+
+		lines = np.array([
+			( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
+			for index in xrange(imin, imax+1)
+			if index in keyframes
+		], dtype=np.int32)
+
+		now = iround((imax - src.index) * graphscale / framerate)
+		cv2.line(graph,
+			(0, now), (screenw, now), (255, 255, 255), thickness=2)
+
+		if lines.shape[0] > 0:
+			cv2.polylines(
+				graph,
+				[lines],
+				False,
+				(255, 255, 0),
+				thickness=2
+			)
+			for pos in lines:
+				x,y = pos
+				cv2.line(
+					graph,
+					(x-10, y), (x+10, y),
+					(0, 255, 255),
+					thickness=1)
+
+		cv2.imshow("graph", graph)
 
 
 def onmouse(event, x, y, flags, userdata):
@@ -272,26 +299,40 @@ def onmouse_output(event, x, y, flags, userdata):
 	
 	if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 		newindex = iround(totalframes * x / screenw)
-		(rv, curframe) = src.read(newindex)
+		curframe = src.read(newindex)
 		if mousedown:
 			keyframes[src.index] = anchor
 		else:
-			anchor = keyframes.get(src.index, anchor)
+			#anchor = keyframes.get(src.index, anchor)
+			anchor = get_keyframe(src.index)
 		redraw = True
 
 def onmouse_graph(event, x, y, flags, userdata):
 	global redraw, curframe, anchor
 	
-	if (event == cv2.EVENT_LBUTTONDOWN):
-		delta = (graphdepth/2 - y / graphscale) * framerate
-		#delta = (100 - y) // 2
-		newindex = iround(src.index + delta)
-		(rv, curframe) = src.read(newindex)
-		if mousedown:
-			keyframes[src.index] = anchor
+	delta = (graphdepth/2 - y / graphscale) * framerate
+	newindex = iround(src.index + delta)
+	
+	
+	if graphdraw:
+		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
+			(ax,ay) = anchor
+			ax = x
+			keyframes[newindex] = (ax, ay)
+			redraw = True
+
+	else:
+		if (event == cv2.EVENT_LBUTTONDOWN):
+			curframe = src.read(newindex)
+			if mousedown:
+				keyframes[src.index] = anchor
+			else:
+				#anchor = keyframes.get(src.index, anchor)
+				anchor = get_keyframe(src.index)
+			redraw = True
 		else:
-			anchor = keyframes.get(src.index, anchor)
-		redraw = True
+			pass
+			#print "graph", event, (x,y), flags
 	
 def set_cursor(x, y):
 	global anchor, redraw
@@ -303,11 +344,38 @@ def save():
 	json.dump(meta, open(metafile, "w"), indent=2, sort_keys=True)
 	json.dump(keyframes, open(meta['keyframes'], 'w'), indent=2, sort_keys=True)
 
-draw_output = True
+def get_keyframe(index):
+	if index in keyframes:
+		return keyframes[index]
+	else:
+		prev = [i for i in keyframes if i < index]
+		next = [i for i in keyframes if i > index]
+		prev = max(prev) if prev else None
+		next = max(next) if next else None
+		
+		if prev is None and next is None:
+			return meta['anchor']
+		
+		if prev is None:
+			return keyframes[next]
+		
+		if next is None:
+			return keyframes[prev]
+		
+		alpha = (index - prev) / (next-prev)
+		u = np.array(keyframes[prev])
+		v = np.array(keyframes[next])
+		return np.int32(0.5 + u + alpha * (v-u))
+
+draw_output = False
 draw_graph = True
 
-graphdepth = 5.0
-graphscale = 100 # per second
+graphbg = None
+graphbg_index = None
+graphdraw = False
+
+graphdepth = 3.0
+graphscale = 200 # pixels per second
 
 graphheight = iround(1 + graphdepth * graphscale)
 
@@ -346,7 +414,6 @@ if __name__ == '__main__':
 	#controller.set_point = anchor[0]
 	
 	srcvid = cv2.VideoCapture(meta['source'])
-	src = VideoSource(srcvid)
 	
 	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
 	totalframes = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)
@@ -354,19 +421,24 @@ if __name__ == '__main__':
 	srcw = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
+	graphslices = iround(graphdepth * framerate)
+	src = VideoSource(srcvid, numcache=graphslices)
+
 	firstpos = max(keyframes)
-	(rv, curframe) = src.read(firstpos)
+	curframe = src.read(firstpos)
 	
 	try:
 		cv2.namedWindow("source", cv2.WINDOW_NORMAL)
 		if draw_output: cv2.namedWindow("output", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
+		if draw_graph: cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
+
 		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
 		if draw_output: cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
-		cv2.resizeWindow("graph", int(screenw/2), graphheight)
+		if draw_graph: cv2.resizeWindow("graph", int(screenw/2), graphheight)
+
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
 		if draw_output: cv2.setMouseCallback("output", onmouse_output) # for seeking
-		cv2.setMouseCallback("graph", onmouse_graph)
+		if draw_graph: cv2.setMouseCallback("graph", onmouse_graph)
 		
 		mousedown = False # override during mousedown
 
@@ -393,14 +465,15 @@ if __name__ == '__main__':
 					sched = now
 
 				newindex = src.index + sgn(playspeed)
-				(rv, curframe) = src.read(newindex)
-				assert rv
+				curframe = src.read(newindex)
+				assert curframe is not None
 				redraw = True
 
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					anchor = keyframes.get(src.index, anchor)
+					#anchor = keyframes.get(src.index, anchor)
+					anchor = get_keyframe(src.index)
 
 				if (src.index == 0 and playspeed < 0):
 					playspeed = 0
@@ -419,39 +492,58 @@ if __name__ == '__main__':
 			if key == VK_LEFT:
 				delta = 1
 				#if shiftdown: delta = 10
-				(rv, curframe) = src.read(src.index - delta)
-				assert rv
+				curframe = src.read(src.index - delta)
+				assert curframe is not None
 
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					anchor = keyframes.get(src.index, anchor)
+					#anchor = keyframes.get(src.index, anchor)
+					anchor = get_keyframe(src.index)
 
 				redraw = True
 
 			if key == VK_RIGHT:
 				delta = 1
 				#if shiftdown: delta = 10
-				(rv, curframe) = src.read(src.index + delta)
-				assert rv
+				curframe = src.read(src.index + delta)
+				assert curframe is not None
 
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					anchor = keyframes.get(src.index, anchor)
+					#anchor = keyframes.get(src.index, anchor)
+					anchor = get_keyframe(src.index)
 				
 				redraw = True
 			
 			if key == ord('x'):
 				if src.index in keyframes:
 					del keyframes[src.index]
-					lasti = max(i for i in keyframes if i < src.index)
-					anchor = keyframes[lasti]
+					#lasti = max(i for i in keyframes if i < src.index)
+					#anchor = keyframes[lasti]
+					anchor = get_keyframe(src.index)
 					redraw = True
 			
+			if key == ord('c'): # cache all frames in the graph
+				imin = iround(src.index - graphdepth/2 * framerate)
+				imax = iround(src.index + graphdepth/2 * framerate)
+				src.cache_range(imin, imax+1)
+				redraw = True
+				graphbg_index = None
+			
+			if key == ord('g'):
+				draw_graph = not draw_graph
+				if draw_graph:
+					redraw = True
+				
 			if key == ord('s'):
 				save()
 				print "saved"
+			
+			if key == ord('d'):
+				graphdraw = not graphdraw
+				print "graphdraw", graphdraw
 			
 			if key == ord('l'):
 				playspeed += 0.2
@@ -483,5 +575,5 @@ if __name__ == '__main__':
 	finally:
 		cv2.destroyWindow("source")
 		if draw_output: cv2.destroyWindow("output")
-		cv2.destroyWindow("graph")
+		if draw_graph: cv2.destroyWindow("graph")
 		save()
