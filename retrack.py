@@ -50,13 +50,25 @@ class PID:
 
 ########################################################################
 
+
+def getslice(frame, anchor):
+	return None
+	
+	if anchor is not None:
+		(x,y) = anchor
+	else:
+		y = iround(frame.shape[0] * 0.333)
+	#return (frame.sum(axis=0) / frame.shape[1]).astype(np.uint8)
+	return frame[y]
+
 class VideoSource(object):
-	def __init__(self, vid, numcache=50, numstep=25):
+	def __init__(self, vid, numcache=100, numstep=25):
 		self.vid = vid
 		self.index = -1 # just for relative addressing
 		self.numcache = numcache
 		self.numstep = numstep
 		self.cache = {} # index -> (rv,frame)
+		self.stripes = {} # index -> row
 		self.mru = [] # oldest -> newest
 	
 	def _prefetch(self, newindex):
@@ -75,7 +87,9 @@ class VideoSource(object):
 						self.vid.grab()
 					else:
 						print "reading frame {0}".format(i)
-						self.cache[i] = self.vid.read()
+						(rv, frame) = self.cache[i] = self.vid.read()
+						if rv:
+							self.stripes[i] = getslice(frame, keyframes.get(i, None))
 				
 				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
 		
@@ -86,11 +100,14 @@ class VideoSource(object):
 				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex)
 			
 			print "reading frame {0}".format(newindex)
-			self.cache[newindex] = self.vid.read()
+			(rv,frame) = self.cache[newindex] = self.vid.read()
+			self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
+			
 			self.mru = [i for i in self.mru if i != newindex] + [newindex]
 		
 		self.mru = self.mru[-self.numcache:]
 		self.cache = {i: self.cache[i] for i in self.mru}
+		self.stripes = {i: self.stripes[i] for i in self.mru}
 			
 	def read(self, newindex=None):
 		if newindex is None:
@@ -145,22 +162,24 @@ def redraw_display():
 	
 	M = Translate * Scale * Anchor
 	InvM = np.linalg.inv(M)
-	
-	surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
-	
+
 	viewbox = meta['viewbox']
-	cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
+	
+	if draw_output:
+		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
+		
+		cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
 
-	cv2.line(surface,
-		(position[0]-10, position[1]-10),
-		(position[0]+10, position[1]+10), 
-		cursorcolor,  thickness=2)
-	cv2.line(surface,
-		(position[0]+10, position[1]-10),
-		(position[0]-10, position[1]+10), 
-		cursorcolor,  thickness=2)
+		cv2.line(surface,
+			(position[0]-10, position[1]-10),
+			(position[0]+10, position[1]+10), 
+			cursorcolor,  thickness=2)
+		cv2.line(surface,
+			(position[0]+10, position[1]-10),
+			(position[0]-10, position[1]+10), 
+			cursorcolor,  thickness=2)
 
-	cv2.imshow("output", surface)
+		cv2.imshow("output", surface)
 
 
 	source = curframe.copy()
@@ -187,10 +206,17 @@ def redraw_display():
 
 	cv2.imshow("source", source)
 	
-	graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
-	
 	imin = iround(src.index - graphdepth/2 * framerate)
 	imax = iround(src.index + graphdepth/2 * framerate)
+	
+	graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
+#	graph = np.array([
+#		src.stripes[i] if i in src.stripes else ([(0,0,0)] * 1920)
+#		for i in reversed(xrange(imin, imax+1))
+#	], dtype=np.uint8)
+	
+	graph = cv2.resize(graph, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
+	print graph.dtype
 	
 	lines = np.array([
 		( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
@@ -198,7 +224,7 @@ def redraw_display():
 		if index in keyframes
 	], dtype=np.int32)
 	
-	now = iround(graphdepth/2 * graphscale)
+	now = iround((imax - src.index) * graphscale / framerate)
 	cv2.line(graph,
 		(0, now), (screenw, now), (255, 255, 255), thickness=2)
 	
@@ -210,7 +236,14 @@ def redraw_display():
 			(255, 255, 0),
 			thickness=2
 		)
-
+		for pos in lines:
+			x,y = pos
+			cv2.line(
+				graph,
+				(x-10, y), (x+10, y),
+				(0, 255, 255),
+				thickness=1)
+			
 	cv2.imshow("graph", graph)
 
 
@@ -270,6 +303,9 @@ def save():
 	json.dump(meta, open(metafile, "w"), indent=2, sort_keys=True)
 	json.dump(keyframes, open(meta['keyframes'], 'w'), indent=2, sort_keys=True)
 
+draw_output = True
+draw_graph = True
+
 graphdepth = 5.0
 graphscale = 100 # per second
 
@@ -323,13 +359,13 @@ if __name__ == '__main__':
 	
 	try:
 		cv2.namedWindow("source", cv2.WINDOW_NORMAL)
-		cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+		if draw_output: cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
 		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
-		cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
+		if draw_output: cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
 		cv2.resizeWindow("graph", int(screenw/2), graphheight)
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
-		cv2.setMouseCallback("output", onmouse_output) # for seeking
+		if draw_output: cv2.setMouseCallback("output", onmouse_output) # for seeking
 		cv2.setMouseCallback("graph", onmouse_graph)
 		
 		mousedown = False # override during mousedown
@@ -406,17 +442,24 @@ if __name__ == '__main__':
 				
 				redraw = True
 			
+			if key == ord('x'):
+				if src.index in keyframes:
+					del keyframes[src.index]
+					lasti = max(i for i in keyframes if i < src.index)
+					anchor = keyframes[lasti]
+					redraw = True
+			
 			if key == ord('s'):
 				save()
 				print "saved"
 			
 			if key == ord('l'):
-				playspeed += 0.5
+				playspeed += 0.2
 				print "speed: {0}".format(playspeed)
 				sched = time.clock()
 
 			if key == ord('j'):
-				playspeed -= 0.5
+				playspeed -= 0.2
 				print "speed: {0}".format(playspeed)
 				sched = time.clock()
 
@@ -439,6 +482,6 @@ if __name__ == '__main__':
 
 	finally:
 		cv2.destroyWindow("source")
-		cv2.destroyWindow("output")
+		if draw_output: cv2.destroyWindow("output")
 		cv2.destroyWindow("graph")
 		save()
