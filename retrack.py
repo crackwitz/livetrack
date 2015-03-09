@@ -51,7 +51,7 @@ class PID:
 ########################################################################
 
 class VideoSource(object):
-	def __init__(self, vid, numcache=30, numstep=25):
+	def __init__(self, vid, numcache=50, numstep=25):
 		self.vid = vid
 		self.index = -1 # just for relative addressing
 		self.numcache = numcache
@@ -63,7 +63,7 @@ class VideoSource(object):
 		rel = newindex - self.index
 
 		if rel < 0:
-			do_prefetch = not all(i in self.cache for i in xrange(newindex-3, newindex+1))
+			do_prefetch = not all(i in self.cache for i in xrange(newindex-1, newindex+1))
 		
 			if do_prefetch:
 				upcoming = range(newindex-self.numstep, newindex+1)
@@ -114,6 +114,12 @@ def sgn(x):
 	return (x > 0) - (x < 0)
 
 def redraw_display():
+	if mousedown:
+		cursorcolor = (255, 0, 0)
+	else:
+		cursorcolor = (255, 255, 0)
+
+
 	# anchor is animated
 	(ax,ay) = anchor
 	ay = meta['anchor'][1]
@@ -138,20 +144,21 @@ def redraw_display():
 	])
 	
 	M = Translate * Scale * Anchor
+	InvM = np.linalg.inv(M)
 	
 	surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
 	
 	viewbox = meta['viewbox']
-	cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,0,255), thickness=2)
+	cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
 
 	cv2.line(surface,
 		(position[0]-10, position[1]-10),
 		(position[0]+10, position[1]+10), 
-		(255, 0, 255),  thickness=2)
+		cursorcolor,  thickness=2)
 	cv2.line(surface,
 		(position[0]+10, position[1]-10),
 		(position[0]-10, position[1]+10), 
-		(255, 0, 255),  thickness=2)
+		cursorcolor,  thickness=2)
 
 	cv2.imshow("output", surface)
 
@@ -161,34 +168,48 @@ def redraw_display():
 	cv2.line(source,
 		(anchor[0]-10, anchor[1]-10),
 		(anchor[0]+10, anchor[1]+10), 
-		(255, 0, 255),  thickness=2)
+		cursorcolor,  thickness=2)
 	cv2.line(source,
 		(anchor[0]+10, anchor[1]-10),
 		(anchor[0]-10, anchor[1]+10), 
-		(255, 0, 255),  thickness=2)
+		cursorcolor,  thickness=2)
+	
+	# todo: transform using inverse M
+	TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
+	BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
+	
+	TL = tuple(map(iround, np.array(TL[0:2,0].T).tolist()[0]))
+	BR = tuple(map(iround, np.array(BR[0:2,0].T).tolist()[0]))
+	
+	cv2.rectangle(source,
+		TL, BR,
+		(255, 0, 0), thickness=2)
 
 	cv2.imshow("source", source)
 	
-	graph = np.zeros((201, screenw, 3), dtype=np.uint8)
+	graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
+	
+	imin = iround(src.index - graphdepth/2 * framerate)
+	imax = iround(src.index + graphdepth/2 * framerate)
 	
 	lines = np.array([
-		(int(keyframes[i][0]), y)
-		for y,i in enumerate(reversed(xrange(src.index - 100, src.index + 100 + 1)))
-		if i in keyframes
+		( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
+		for index in xrange(imin, imax+1)
+		if index in keyframes
 	], dtype=np.int32)
 	
-	#import pdb; pdb.set_trace()
-
+	now = iround(graphdepth/2 * graphscale)
 	cv2.line(graph,
-		(0, 100), (screenw, 100), (255, 255, 255), thickness=2)
-		
-	cv2.polylines(
-		graph,
-		[lines],
-		False,
-		(255, 255, 0),
-		thickness=2
-	)
+		(0, now), (screenw, now), (255, 255, 255), thickness=2)
+	
+	if lines.shape[0] > 0:
+		cv2.polylines(
+			graph,
+			[lines],
+			False,
+			(255, 255, 0),
+			thickness=2
+		)
 
 	cv2.imshow("graph", graph)
 
@@ -213,11 +234,46 @@ def onmouse(event, x, y, flags, userdata):
 		set_cursor(x, y)
 		mousedown = False
 
+def onmouse_output(event, x, y, flags, userdata):
+	global redraw, curframe, anchor
+	
+	if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
+		newindex = iround(totalframes * x / screenw)
+		(rv, curframe) = src.read(newindex)
+		if mousedown:
+			keyframes[src.index] = anchor
+		else:
+			anchor = keyframes.get(src.index, anchor)
+		redraw = True
+
+def onmouse_graph(event, x, y, flags, userdata):
+	global redraw, curframe, anchor
+	
+	if (event == cv2.EVENT_LBUTTONDOWN):
+		delta = (graphdepth/2 - y / graphscale) * framerate
+		#delta = (100 - y) // 2
+		newindex = iround(src.index + delta)
+		(rv, curframe) = src.read(newindex)
+		if mousedown:
+			keyframes[src.index] = anchor
+		else:
+			anchor = keyframes.get(src.index, anchor)
+		redraw = True
+	
 def set_cursor(x, y):
-	global anchor
+	global anchor, redraw
 	anchor = (x,y)
 	keyframes[src.index] = anchor
-	redraw_display()
+	redraw = True
+
+def save():
+	json.dump(meta, open(metafile, "w"), indent=2, sort_keys=True)
+	json.dump(keyframes, open(meta['keyframes'], 'w'), indent=2, sort_keys=True)
+
+graphdepth = 5.0
+graphscale = 100 # per second
+
+graphheight = iround(1 + graphdepth * graphscale)
 
 
 if __name__ == '__main__':
@@ -257,11 +313,13 @@ if __name__ == '__main__':
 	src = VideoSource(srcvid)
 	
 	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
+	totalframes = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)
 	print "{0} fps".format(framerate)
 	srcw = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
-	(rv, curframe) = src.read(0)
+	firstpos = max(keyframes)
+	(rv, curframe) = src.read(firstpos)
 	
 	try:
 		cv2.namedWindow("source", cv2.WINDOW_NORMAL)
@@ -269,17 +327,19 @@ if __name__ == '__main__':
 		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
 		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
 		cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
-		cv2.resizeWindow("graph", int(screenw/2), 201)
+		cv2.resizeWindow("graph", int(screenw/2), graphheight)
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
+		cv2.setMouseCallback("output", onmouse_output) # for seeking
+		cv2.setMouseCallback("graph", onmouse_graph)
 		
-		redraw_display() # init
-		
+		mousedown = False # override during mousedown
+
 		running = True
 		sched = None
 		playspeed = 0
 		
-		mousedown = False # override during mousedown
-
+		redraw_display() # init
+		
 		redraw = False
 		while running:
 			if redraw:
@@ -287,51 +347,6 @@ if __name__ == '__main__':
 				redraw_display()
 
 			key = cv2.waitKey(1)
-			
-			if key == 27:
-				running = False
-				break
-
-			if key == VK_LEFT:
-				(rv, curframe) = src.read(src.index - 1)
-				assert rv
-
-				if mousedown:
-					keyframes[src.index] = anchor
-				else:
-					anchor = keyframes.get(src.index, anchor)
-
-				redraw = True
-
-			if key == VK_RIGHT:
-				(rv, curframe) = src.read(src.index + 1)
-				assert rv
-
-				if mousedown:
-					keyframes[src.index] = anchor
-				else:
-					anchor = keyframes.get(src.index, anchor)
-				
-				redraw = True
-			
-			if key == ord('l'):
-				playspeed += 0.5
-				print "speed: {0}".format(playspeed)
-				sched = time.clock()
-
-			if key == ord('j'):
-				playspeed -= 0.5
-				print "speed: {0}".format(playspeed)
-				sched = time.clock()
-
-			if key in (VK_SPACE, ord('k')):
-				if abs(playspeed) > 1e-3:
-					playspeed = 0.0
-				else:
-					playspeed = 1.0
-					sched = time.clock()
-
-			#print "key", key
 			
 			if abs(playspeed) > 1e-3:
 				now = time.clock()
@@ -357,6 +372,61 @@ if __name__ == '__main__':
 					dt = 1 / (framerate * abs(playspeed))
 					sched += dt
 
+			if key == -1: continue
+			
+			if key == 27:
+				running = False
+				break
+
+			#print "key", key
+
+			if key == VK_LEFT:
+				delta = 1
+				#if shiftdown: delta = 10
+				(rv, curframe) = src.read(src.index - delta)
+				assert rv
+
+				if mousedown:
+					keyframes[src.index] = anchor
+				else:
+					anchor = keyframes.get(src.index, anchor)
+
+				redraw = True
+
+			if key == VK_RIGHT:
+				delta = 1
+				#if shiftdown: delta = 10
+				(rv, curframe) = src.read(src.index + delta)
+				assert rv
+
+				if mousedown:
+					keyframes[src.index] = anchor
+				else:
+					anchor = keyframes.get(src.index, anchor)
+				
+				redraw = True
+			
+			if key == ord('s'):
+				save()
+				print "saved"
+			
+			if key == ord('l'):
+				playspeed += 0.5
+				print "speed: {0}".format(playspeed)
+				sched = time.clock()
+
+			if key == ord('j'):
+				playspeed -= 0.5
+				print "speed: {0}".format(playspeed)
+				sched = time.clock()
+
+			if key in (VK_SPACE, ord('k')):
+				if abs(playspeed) > 1e-3:
+					playspeed = 0.0
+				else:
+					playspeed = 1.0
+					sched = time.clock()
+
 
 	# space -> stop/play
 	# left/right -> frame step
@@ -371,5 +441,4 @@ if __name__ == '__main__':
 		cv2.destroyWindow("source")
 		cv2.destroyWindow("output")
 		cv2.destroyWindow("graph")
-		json.dump(meta, open(metafile, "w"), indent=2, sort_keys=True)
-		json.dump(keyframes, open(meta['keyframes'], 'w'), indent=2, sort_keys=True)
+		save()
