@@ -72,8 +72,13 @@ class VideoSource(object):
 		self.mru = [] # oldest -> newest
 	
 	def cache_range(self, start, stop):
-		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
 		requested = range(start, stop)
+		requested = [i for i in requested if i not in self.cache]
+		if not requested: return
+		start = min(requested)
+		stop = max(requested)+1
+		requested = range(start, stop)
+		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
 		for i in requested:
 			if i in self.cache:
 				rv = self.vid.grab()
@@ -113,7 +118,7 @@ class VideoSource(object):
 				print "seeking to {0}".format(newindex)
 				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex)
 			
-			print "reading frame {0}".format(newindex)
+			#print "reading frame {0}".format(newindex)
 			(rv,frame) = self.vid.read()
 			if rv:
 				self.cache[newindex] = frame
@@ -141,6 +146,9 @@ VK_LEFT = 2424832
 VK_RIGHT = 2555904
 VK_SPACE = 32
 
+VK_PGUP = 2162688
+VK_PGDN = 2228224
+
 def iround(x):
 	return int(round(x))
 
@@ -148,7 +156,7 @@ def sgn(x):
 	return (x > 0) - (x < 0)
 
 def redraw_display():
-	print "redraw"
+	#print "redraw"
 	if mousedown:
 		cursorcolor = (255, 0, 0)
 	else:
@@ -225,25 +233,73 @@ def redraw_display():
 	cv2.imshow("source", source)
 	
 	if draw_graph:
-		imin = iround(src.index - graphdepth/2 * framerate)
-		imax = iround(src.index + graphdepth/2 * framerate)
+		global graphbg, graphbg_head, graphbg_indices
+		# graphslices/2 is midpoint
+		
+		# draw this range
+		imax = src.index + graphslices//2
+		imin = imax - graphslices
+		indices = range(imax, imin, -1)
 
-		if 0:	
-			graph = np.zeros((graphheight, screenw, 3), dtype=np.uint8)
+		if graphbg is None: # full redraw
+			t0 = time.clock()
+			graphbg = [
+				src.cache[i][get_keyframe(i)[1]] if i in src.cache else emptyrow
+				for i in indices
+			]
+			t1 = time.clock()
+			graphbg = np.array(graphbg, dtype=np.uint8)
+			t2 = time.clock()
+			graphbg_head = imax
+			graphbg_indices = set(indices) & set(src.cache)
 
-		else:
-			if graphbg_index != src.index:
-				global graphbg, graphbg_index
+			print "graphbg redraw {0:.3f} {1:.3f}".format(t1-t0, t2-t1)
+		
+		if graphbg_head != imax: # scrolling to current position
+			t0 = time.clock()
+			shift = imax - graphbg_head
+			graphbg = np.roll(graphbg, shift, axis=0)
+			oldhead = graphbg_head
+			graphbg_head = imax
+			t1 = time.clock()
 			
-				emptyrow = np.uint8([(0,0,0)] * 1920)
-				graphbg = np.array([
-					src.cache[i][ay] if i in src.cache else emptyrow
-					for i in reversed(xrange(imin, imax+1))
-				], dtype=np.uint8)
-				graphbg = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
-				graphbg_index = src.index
+			# replace rolled-over lines
+			ashift = min(graphslices, abs(shift))
+			
+			if shift > 0:
+				#import pdb; pdb.set_trace()
+				newindices = xrange(imax, imax-shift, -1)
+				graphbg_indices = set(i for i in graphbg_indices if i > imin)
+			elif shift < 0:
+				#import pdb; pdb.set_trace()
+				newindices = xrange(imin-shift, imin, -1)
+				graphbg_indices = set(i for i in graphbg_indices if i <= imax)
+			
+			t2 = time.clock()
+			replacements = [
+				src.cache[i][get_keyframe(i)[1]] if i in src.cache else emptyrow
+				for i in newindices
+			]
+			graphbg_indices.update( set(newindices) & set(src.cache) )
 
-			graph = graphbg.copy()
+			t3 = time.clock()
+
+			if shift > 0:
+				graphbg[:ashift] = replacements
+			elif shift < 0:
+				graphbg[-ashift:] = replacements
+			
+			t4 = time.clock()
+
+			#print "graphbg roll {0:.3f} {1:.3f} {1:.3f} {1:.3f}".format(t1-t0, t2-t1, t3-t2, t4-t3)
+
+		updates = (set(indices) & set(src.cache)) - graphbg_indices
+		if updates:
+			for i in updates:
+				graphbg[graphbg_head - i] = src.cache[i][get_keyframe(i)[1]]
+			graphbg_indices.update(updates)
+		
+		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
 
 		lines = np.array([
 			( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
@@ -316,7 +372,7 @@ def onmouse_graph(event, x, y, flags, userdata):
 	
 	if graphdraw:
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
-			(ax,ay) = anchor
+			(ax,ay) = get_keyframe(src.index)
 			ax = x
 			keyframes[newindex] = (ax, ay)
 			redraw = True
@@ -372,13 +428,15 @@ draw_output = True
 draw_graph = True
 
 graphbg = None
-graphbg_index = None
+graphbg_head = None
+graphbg_indices = set()
 graphdraw = False
 
-graphdepth = 3.0
-graphscale = 200 # pixels per second
+graphdepth = 5.0
+graphscale = 150 # pixels per second
+# graphslices
 
-graphheight = iround(1 + graphdepth * graphscale)
+graphheight = iround(graphdepth * graphscale)
 
 
 if __name__ == '__main__':
@@ -406,6 +464,8 @@ if __name__ == '__main__':
 	screenw, screenh = meta['screen']
 	position = meta['position']
 	anchor = meta['anchor']
+
+	emptyrow = np.uint8([(0,0,0)] * screenw)
 	
 	# TODO: range of anchor such that viewbox inside video
 
@@ -447,9 +507,7 @@ if __name__ == '__main__':
 		sched = None
 		playspeed = 0
 		
-		redraw_display() # init
-		
-		redraw = False
+		redraw = True # init
 		while running:
 			if redraw:
 				redraw = False
@@ -488,11 +546,11 @@ if __name__ == '__main__':
 				running = False
 				break
 
-			#print "key", key
+			print "key", key
 
-			if key == VK_LEFT:
+			if key in (VK_LEFT, VK_PGUP):
 				delta = 1
-				#if shiftdown: delta = 10
+				if key == VK_PGUP: delta = 25
 				curframe = src.read(src.index - delta)
 				assert curframe is not None
 
@@ -504,9 +562,9 @@ if __name__ == '__main__':
 
 				redraw = True
 
-			if key == VK_RIGHT:
+			if key in (VK_RIGHT, VK_PGDN):
 				delta = 1
-				#if shiftdown: delta = 10
+				if key == VK_PGDN: delta = 25
 				curframe = src.read(src.index + delta)
 				assert curframe is not None
 
@@ -531,11 +589,16 @@ if __name__ == '__main__':
 				imax = iround(src.index + graphdepth/2 * framerate)
 				src.cache_range(imin, imax+1)
 				redraw = True
-				graphbg_index = None
+				graphbg = None
 			
 			if key == ord('g'):
 				draw_graph = not draw_graph
 				if draw_graph:
+					redraw = True
+				
+			if key == ord('o'):
+				draw_output = not draw_output
+				if draw_output:
 					redraw = True
 				
 			if key == ord('s'):
