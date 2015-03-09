@@ -351,7 +351,7 @@ def get_keyframe(index):
 		prev = [i for i in keyframes if i < index]
 		next = [i for i in keyframes if i > index]
 		prev = max(prev) if prev else None
-		next = max(next) if next else None
+		next = min(next) if next else None
 		
 		if prev is None and next is None:
 			return meta['anchor']
@@ -363,11 +363,12 @@ def get_keyframe(index):
 			return keyframes[prev]
 		
 		alpha = (index - prev) / (next-prev)
+		#print "alpha", alpha, index, prev, next
 		u = np.array(keyframes[prev])
 		v = np.array(keyframes[next])
 		return np.int32(0.5 + u + alpha * (v-u))
 
-draw_output = False
+draw_output = True
 draw_graph = True
 
 graphbg = None
