@@ -7,49 +7,10 @@ import cv2
 import json
 import pprint; pp = pprint.pprint
 
-########################################################################
-# http://code.activestate.com/recipes/577231-discrete-pid-controller/
-
-class PID:
-	"Discrete PID control"
-	def __init__(self, P=2.0, I=0.0, D=1.0, Derivator=0, Integrator=0, Integrator_max=500, Integrator_min=-500):
-		self.Kp=P
-		self.Ki=I
-		self.Kd=D
-		self.Derivator=Derivator
-		self.Integrator=Integrator
-		self.Integrator_max=Integrator_max
-		self.Integrator_min=Integrator_min
-
-		self.set_point=0.0
-		self.error=0.0
-
-	def update(self,current_value):
-		"""
-		Calculate PID output value for given reference input and feedback
-		"""
-
-		self.error = self.set_point - current_value
-
-		self.P_value = self.Kp * self.error
-		self.D_value = self.Kd * ( self.error - self.Derivator)
-		self.Derivator = self.error
-
-		self.Integrator = self.Integrator + self.error
-
-		if self.Integrator > self.Integrator_max:
-			self.Integrator = self.Integrator_max
-		elif self.Integrator < self.Integrator_min:
-			self.Integrator = self.Integrator_min
-
-		self.I_value = self.Integrator * self.Ki
-
-		PID = self.P_value + self.I_value + self.D_value
-
-		return PID
+from mosse import MOSSE
+from opencv_common import RectSelector
 
 ########################################################################
-
 
 def getslice(frame, anchor):
 	return None
@@ -218,6 +179,11 @@ def redraw_display():
 			(position[0]+10, position[1]-10),
 			(position[0]-10, position[1]+10), 
 			cursorcolor,  thickness=2)
+		
+		timepos = iround(screenw * src.index / totalframes)
+		cv2.line(surface,
+			(timepos, 0), (timepos, 20),
+			(255, 255, 0), thickness=4)
 
 		cv2.imshow("output", surface)
 
@@ -256,6 +222,13 @@ def redraw_display():
 	cv2.putText(source,
 		text,
 		(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
+	
+	if use_tracker:
+		tracker_rectsel.draw(source)
+	
+	if tracker:
+		tracker.draw_state(source)
+		cv2.imshow('tracker state', tracker.state_vis)
 	
 	cv2.imshow("source", source)
 	
@@ -349,7 +322,12 @@ def redraw_display():
 			for i,pos in zip(lineindices,lines):
 				x,y = pos
 				
+				points = np.array(map(get_keyframe, [i-1, i, i+1]))
+				
+				d2 = np.linalg.norm((points[0]+points[2])/2 - points[1])
+				
 				spread = 10 # todo: some way to tell if this was raw or smoothed
+				spread = 5 + iround(d2 * 20)
 				
 				thickness = 1
 				color = (0, 255, 255)
@@ -357,6 +335,7 @@ def redraw_display():
 					if graphsmooth_start <= i <= graphsmooth_stop:
 						thickness = 3
 						color = (255,255,255)
+						spread += 5
 					
 				cv2.line(
 					graph,
@@ -381,7 +360,12 @@ def redraw_display():
 
 
 def onmouse(event, x, y, flags, userdata):
-	global mousedown
+	global mousedown, redraw
+	
+	if use_tracker:
+		tracker_rectsel.onmouse(event, x, y, flags, userdata)
+		redraw = True
+		return
 	
 	if event == cv2.EVENT_MOUSEMOVE:
 		#print "move", event, (x,y), flags
@@ -401,39 +385,32 @@ def onmouse(event, x, y, flags, userdata):
 		mousedown = False
 
 def onmouse_output(event, x, y, flags, userdata):
-	global redraw, curframe, anchor
-	
 	if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 		newindex = iround(totalframes * x / screenw)
-		curframe = src.read(newindex)
-		print "frame", src.index
-		assert not mousedown
-		#keyframes[src.index] = anchor
-		anchor = get_keyframe(src.index)
-		redraw = True
+		load_this_frame(newindex)
 
 def onmouse_graph(event, x, y, flags, userdata):
-	global redraw, curframe, anchor
+	global redraw
 	
 	curindex = graphbg_head - iround(y / graphscale * framerate)
 
 #	delta = (graphdepth/2 - y / graphscale) * framerate
 #	newindex = iround(src.index + delta)
 	
-	if graphsmoothing:
+	if True:
 		global graphsmooth_start, graphsmooth_stop
 		
 		# implement some selection dragging
-		if (event == cv2.EVENT_LBUTTONDOWN):
+		if event in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN)[1:]:
 			graphsmooth_start = curindex
 			graphsmooth_stop = curindex
 			redraw = True
 		
-		elif (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
+		elif (event == cv2.EVENT_MOUSEMOVE and flags in (cv2.EVENT_FLAG_LBUTTON, cv2.EVENT_FLAG_RBUTTON)[1:]):
 			graphsmooth_stop = curindex
 			redraw = True
 			
-		elif (event == cv2.EVENT_LBUTTONUP):
+		elif graphsmooth_start is not None and event in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP)[1:]:
 			graphsmooth_stop = curindex
 			redraw = True
 			
@@ -445,20 +422,21 @@ def onmouse_graph(event, x, y, flags, userdata):
 				for i in indices: del keyframes[i]
 				keyframes.update(oldkeyframes)
 			undoqueue.append(undo)
+			while len(undoqueue) > 100:
+				undoqueue.pop(0)
 			
 			support = 2
 			support = range(-support, +support+1)
 			
 			#import pdb; pdb.set_trace()
 			keyframes.update({
-				i: (np.sum([get_keyframe(i+j) for j in support], axis=0, dtype=np.float32) / len(support)).tolist()
+				i: smoothed_keyframe(i)
 				for i in indices
 			})
 			
 			graphsmooth_start = None
-			#graphsmoothing = False
 
-	elif graphdraw:
+	if graphdraw:
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 			(ax,ay) = get_keyframe(src.index)
 			ax = x
@@ -467,18 +445,21 @@ def onmouse_graph(event, x, y, flags, userdata):
 
 	else:
 		if (event == cv2.EVENT_LBUTTONDOWN):
-			curframe = src.read(curindex) # sets src.index
-			print "frame", src.index
-			assert not mousedown
-			#keyframes[src.index] = anchor
-			anchor = get_keyframe(src.index)
-			redraw = True
+			load_this_frame(curindex)
+
+smoothing_radius = 2
+smoothing_kernel = range(-smoothing_radius, +smoothing_radius+1)
+
+def smoothed_keyframe(i):
+	#import pdb; pdb.set_trace()
+	return (np.sum([get_keyframe(i+j) for j in smoothing_kernel], axis=0, dtype=np.float32) / len(smoothing_kernel)).tolist()
 	
 def set_cursor(x, y):
 	global anchor, redraw
 	anchor = (x,y)
 	keyframes[src.index] = anchor
 	redraw = True
+	print "set cursor", anchor
 
 def save():
 	output = json.dumps(meta, indent=2, sort_keys=True)
@@ -511,6 +492,52 @@ def get_keyframe(index):
 		v = np.array(keyframes[next])
 		return np.int32(0.5 + u + alpha * (v-u))
 
+def on_tracker_rect(rect):
+	global tracker, use_tracker
+	print "rect selected:", rect
+	tracker = MOSSE(curframe_gray, rect)
+	set_cursor(*tracker.pos)
+
+def load_delta_frame(delta):
+	if delta in (-1, +1):
+		load_this_frame(src.index + delta, update_tracker=bool(tracker))
+		
+		if trailing_smooth:
+			target = src.index + -5 * delta
+			keyframes[target] = smoothed_keyframe(target)
+	
+		if tracker:
+			tracker.update(curframe_gray, 0.1)
+			print "tracker updated: xy", tracker.pos
+			set_cursor(*tracker.pos)
+
+	else: # big jump
+		load_this_frame(src.index + delta)
+
+def load_this_frame(index=None, update_tracker=False):
+	global curframe, curframe_gray, redraw, anchor
+	
+	if index is not None:
+		pass
+	else:
+		index = src.index
+
+	delta = index - src.index
+		
+	curframe = src.read(index) # sets src.index
+	curframe_gray = cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY)
+	
+	anchor = get_keyframe(src.index)
+
+	print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
+
+	if update_tracker:
+		print "set tracker to", tracker.pos
+		tracker.pos = anchor
+
+	redraw = True
+
+	
 draw_output = True
 draw_graph = True
 
@@ -520,15 +547,20 @@ graphbg_indices = set()
 
 graphdraw = False
 
-graphsmoothing = False
 graphsmooth_start = None
 graphsmooth_stop = None
+
+trailing_smooth = False
 
 graphdepth = 5.0
 graphscale = 150 # pixels per second
 # graphslices
 
 graphheight = iround(graphdepth * graphscale)
+
+tracker = None
+use_tracker = False
+tracker_rectsel = RectSelector(on_tracker_rect)
 
 undoqueue = []
 
@@ -577,9 +609,12 @@ if __name__ == '__main__':
 	
 	graphslices = iround(graphdepth * framerate)
 	src = VideoSource(srcvid, numcache=200)
-	
-	firstpos = max(keyframes)
-	curframe = src.read(firstpos)
+
+	if keyframes:
+		load_this_frame(max(keyframes)+1)
+	else:
+		load_this_frame(0)
+
 	print "frame", src.index
 	
 	try:
@@ -617,14 +652,10 @@ if __name__ == '__main__':
 				else:
 					sched = now
 
-				newindex = src.index + sgn(playspeed)
-				curframe = src.read(newindex)
-				print "frame", src.index
-				assert curframe is not None
-				redraw = True
+				load_delta_frame(sgn(playspeed))
 
 				if mousedown:
-					keyframes[src.index] = anchor
+					keyframes[src.index] = anchor.tolist()
 				else:
 					#anchor = keyframes.get(src.index, anchor)
 					anchor = get_keyframe(src.index)
@@ -646,47 +677,37 @@ if __name__ == '__main__':
 			if key in (VK_LEFT, VK_PGUP):
 				delta = 1
 				if key == VK_PGUP: delta = 25
-				curframe = src.read(src.index - delta)
-				print "frame", src.index
-				assert curframe is not None
-
+				
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					#anchor = keyframes.get(src.index, anchor)
 					anchor = get_keyframe(src.index)
 
-				redraw = True
+				load_delta_frame(-delta)
 
 			if key in (VK_RIGHT, VK_PGDN):
 				delta = 1
 				if key == VK_PGDN:
 					delta = 25
 					src.cache_range(src.index, src.index+delta+1)
-				curframe = src.read(src.index + delta)
-				print "frame", src.index
-				assert curframe is not None
-
+				
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					#anchor = keyframes.get(src.index, anchor)
 					anchor = get_keyframe(src.index)
-				
-				redraw = True
 			
+				load_delta_frame(delta)
+
 			if key == ord('x'):
 				if src.index in keyframes:
 					del keyframes[src.index]
-					#lasti = max(i for i in keyframes if i < src.index)
-					#anchor = keyframes[lasti]
 					anchor = get_keyframe(src.index)
 					redraw = True
 			
 			if key == ord('c'): # cache all frames in the graph
-				imin = iround(src.index - graphdepth/2 * framerate)
-				imax = iround(src.index + graphdepth/2 * framerate)
-				src.cache_range(imin, imax+1)
+				imax = graphbg_head
+				imin = imax - graphslices
+				src.cache_range(imin, imax)
 				redraw = True
 				graphbg = None
 			
@@ -707,10 +728,10 @@ if __name__ == '__main__':
 			if key == ord('d'):
 				graphdraw = not graphdraw
 				print "graphdraw", graphdraw
-			
-			if key == ord('a'):
-				graphsmoothing = not graphsmoothing
-				print "graph smoothing", graphsmoothing
+
+			if key == ord('m'):
+				trailing_smooth = not trailing_smooth
+				print "trailing smooth", trailing_smooth
 			
 			if key == 26: # ctrl-z
 				if undoqueue:
@@ -738,6 +759,14 @@ if __name__ == '__main__':
 				else:
 					playspeed = 1.0
 					sched = time.clock()
+			
+			if key == ord('t'):
+				use_tracker = not use_tracker
+				print "use tracker:", use_tracker
+				tracker = None
+				cv2.destroyWindow('tracker state')
+				tracker_rectsel.enabled = use_tracker
+				redraw = True
 
 
 	# space -> stop/play
@@ -750,7 +779,8 @@ if __name__ == '__main__':
 	# switchable
 
 	finally:
+		cv2.destroyWindow('tracker state')
 		cv2.destroyWindow("source")
-		if draw_output: cv2.destroyWindow("output")
-		if draw_graph: cv2.destroyWindow("graph")
+		cv2.destroyWindow("output")
+		cv2.destroyWindow("graph")
 		save()
