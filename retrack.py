@@ -72,7 +72,6 @@ class VideoSource(object):
 						(rv, frame) = self.vid.read()
 						if rv:
 							self.cache[i] = frame
-							#self.stripes[i] = getslice(frame, keyframes.get(i, None))
 				
 				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
 		
@@ -86,7 +85,6 @@ class VideoSource(object):
 			(rv,frame) = self.vid.read()
 			assert rv
 			self.cache[newindex] = frame
-			#self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
 			
 		self.mru = [i for i in self.mru if i != newindex] + [newindex]
 			
@@ -163,15 +161,6 @@ def redraw_display():
 	
 	if draw_output:
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
-		
-		if 0:
-			t0 = time.clock()
-			keyframed = set((np.array(keyframes.keys()) * screenw / totalframes).astype(np.int32))
-			for x in keyframed:
-				cv2.line(surface,
-					(x, 0), (x, 20), (255,255,255), thickness=1)
-			t1 = time.clock()
-			#print "keyframed {0:.3f}".format(t1-t0)
 		
 		cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
 
@@ -305,7 +294,7 @@ def redraw_display():
 		
 		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
 
-		lineindices = [i for i in range(imin, imax+1) if i in keyframes]
+		lineindices = [i for i in range(imin, imax+1) if keyframes[i] is not None]
 		lines = np.array([
 			( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
 			for index in lineindices
@@ -421,10 +410,11 @@ def onmouse_graph(event, x, y, flags, userdata):
 			indices = range(graphsmooth_start, graphsmooth_stop+1)
 			
 			# prepare to undo this
-			oldkeyframes = {i: keyframes[i] for i in indices if i in keyframes}
+			oldkeyframes = {i: keyframes[i] for i in indices if keyframes[i] is not None}
 			def undo():
-				for i in indices: del keyframes[i]
-				keyframes.update(oldkeyframes)
+				for i in indices: keyframes[i] = None
+				for i in oldkeyframes:
+					keyframes[i] = oldkeyframes[i]
 			undoqueue.append(undo)
 			while len(undoqueue) > 100:
 				undoqueue.pop(0)
@@ -433,10 +423,8 @@ def onmouse_graph(event, x, y, flags, userdata):
 			support = range(-support, +support+1)
 			
 			#import pdb; pdb.set_trace()
-			keyframes.update({
-				i: smoothed_keyframe(i)
-				for i in indices
-			})
+			for i in indices:
+				keyframes[i] = smoothed_keyframe(i)
 			
 			graphsmooth_start = None
 
@@ -463,7 +451,7 @@ def set_cursor(x, y):
 	anchor = (x,y)
 	keyframes[src.index] = anchor
 	redraw = True
-	print "set cursor", anchor
+	#print "set cursor", anchor
 
 def save():
 	output = json.dumps(meta, indent=2, sort_keys=True)
@@ -472,14 +460,28 @@ def save():
 	output = json.dumps(keyframes, indent=2, sort_keys=True)
 	open(meta['keyframes'], 'w').write(output)
 
+def scan_nonempty(keyframes, pos, step):
+	if step < 0:
+		while pos >= 0:
+			if keyframes[pos] is not None:
+				return pos
+			pos += step
+
+	elif step > 0:
+		while pos < len(keyframes):
+			if keyframes[pos] is not None:
+				return pos
+			pos += step
+	
+	return None
+
 def get_keyframe(index):
-	if index in keyframes:
+	if keyframes[index] is not None:
 		return keyframes[index]
+
 	else:
-		prev = [i for i in keyframes if i < index]
-		next = [i for i in keyframes if i > index]
-		prev = max(prev) if prev else None
-		next = min(next) if next else None
+		prev = scan_nonempty(keyframes, index-1, -1)
+		next = scan_nonempty(keyframes, index+1, +1)
 		
 		if prev is None and next is None:
 			return meta['anchor']
@@ -503,6 +505,8 @@ def on_tracker_rect(rect):
 	set_cursor(*tracker_upscale(tracker.pos))
 
 def load_delta_frame(delta):
+	result = None
+	
 	if delta in (-1, +1):
 		load_this_frame(src.index + delta, False)
 		
@@ -511,10 +515,15 @@ def load_delta_frame(delta):
 			keyframes[target] = smoothed_keyframe(target)
 	
 		if tracker:
+			global playspeed
 			tracker.update(curframe_gray, 0.2) # tweakable parameter, default 0.125
-			tpos = tracker_upscale(tracker.pos)
-			print "tracker updated: xy", tpos
-			set_cursor(*tpos)
+			#print "tracker updated: xy", tpos
+			if tracker.good:
+				tpos = tracker_upscale(tracker.pos)
+				set_cursor(*tpos)
+			else:
+				result = True # stop
+				print "tracking bad, aborting"
 
 	else: # big jump
 		load_this_frame(src.index + delta, bool(tracker))
@@ -523,7 +532,8 @@ def load_delta_frame(delta):
 		imax = graphbg_head
 		imin = imax - graphslices//2
 		src.cache_range(imin, imax)
-
+	
+	return result
 
 def load_this_frame(index=None, update_tracker=True):
 	global curframe, curframe_gray, redraw, anchor
@@ -540,7 +550,7 @@ def load_this_frame(index=None, update_tracker=True):
 	
 	anchor = get_keyframe(src.index)
 	
-	print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
+	#print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
 
 	if update_tracker and tracker:
 		print "set tracker to", tracker.pos
@@ -596,13 +606,6 @@ if __name__ == '__main__':
 
 	print json.dumps(meta, indent=2, sort_keys=True)
 	
-	assert os.path.exists(meta['source'])
-	if os.path.exists(meta['keyframes']):
-		keyframes = json.load(open(meta['keyframes']))	
-		keyframes = {int(k): keyframes[k] for k in keyframes}
-	else:
-		keyframes = {}
-	
 	screenw, screenh = meta['screen']
 	position = meta['position']
 	anchor = meta['anchor']
@@ -619,16 +622,24 @@ if __name__ == '__main__':
 	srcvid = cv2.VideoCapture(meta['source'])
 	
 	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
-	totalframes = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT)
+	totalframes = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
 	print "{0} fps".format(framerate)
 	srcw = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
+	assert os.path.exists(meta['source'])
+	if os.path.exists(meta['keyframes']):
+		keyframes = json.load(open(meta['keyframes']))	
+		#keyframes = {int(k): keyframes[k] for k in keyframes}
+	else:
+		keyframes = [None] * totalframes
+	
 	graphslices = iround(graphdepth * framerate)
 	src = VideoSource(srcvid, numcache=graphslices+10)
 
-	if keyframes:
-		load_this_frame(max(keyframes)+1)
+	if not all(k is None for k in keyframes):
+		lastkey = max(k for k in xrange(totalframes) if keyframes[k] is not None)
+		load_this_frame(lastkey+1)
 	else:
 		load_this_frame(0)
 
@@ -655,7 +666,7 @@ if __name__ == '__main__':
 		
 		redraw = True # init
 		while running:
-			assert not any(isinstance(v, np.ndarray) for v in keyframes.itervalues())
+			#assert not any(isinstance(v, np.ndarray) for v in keyframes.itervalues())
 				
 			if redraw:
 				redraw = False
@@ -671,12 +682,11 @@ if __name__ == '__main__':
 				else:
 					sched = now
 
-				load_delta_frame(sgn(playspeed))
+				do_stop = load_delta_frame(sgn(playspeed))
 
 				if mousedown:
 					keyframes[src.index] = anchor
 				else:
-					#anchor = keyframes.get(src.index, anchor)
 					anchor = get_keyframe(src.index)
 
 				if (src.index == 0 and playspeed < 0):
@@ -684,6 +694,9 @@ if __name__ == '__main__':
 				else:
 					dt = 1 / (framerate * abs(playspeed))
 					sched += dt
+				
+				if do_stop:
+					playspeed = 0
 
 			if key == -1: continue
 			
@@ -718,8 +731,8 @@ if __name__ == '__main__':
 				load_delta_frame(delta)
 
 			if key == ord('x'):
-				if src.index in keyframes:
-					del keyframes[src.index]
+				if keyframes[src.index] is not None:
+					keyframes[src.index] = None
 					anchor = get_keyframe(src.index)
 					redraw = True
 			
