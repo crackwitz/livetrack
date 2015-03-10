@@ -33,21 +33,21 @@ class VideoSource(object):
 		self.mru = [] # oldest -> newest
 	
 	def cache_range(self, start, stop):
-		requested = range(start, stop)
+		requested = range(start, stop+1)
 		requested = [i for i in requested if i not in self.cache]
 		if not requested: return
 		start = min(requested)
-		stop = max(requested)+1
-		requested = range(start, stop)
+		stop = max(requested)
+		requested = range(start, stop+1)
 		vidpos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
 		if start != vidpos:
 			print "cache_range: seeking from {0} to {1}".format(vidpos, start)
 			self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
 		for i in requested:
-			if i in self.cache:
-				rv = self.vid.grab()
-			else:
-				(rv, frame) = self.vid.read()
+			rv = self.vid.grab()
+			if not rv: continue
+			if i not in self.cache:
+				(rv, frame) = self.vid.retrieve()
 				if rv:
 					self.cache[i] = frame
 		
@@ -507,12 +507,18 @@ def load_delta_frame(delta):
 			keyframes[target] = smoothed_keyframe(target)
 	
 		if tracker:
-			tracker.update(curframe_gray, 0.1)
+			tracker.update(curframe_gray, 0.05)
 			print "tracker updated: xy", tracker.pos
 			set_cursor(*tracker.pos)
 
 	else: # big jump
 		load_this_frame(src.index + delta)
+
+	if (delta > 0) and (graphbg_head is not None):
+		imax = graphbg_head + delta
+		imin = imax - graphslices
+		src.cache_range(imin, imax)
+
 
 def load_this_frame(index=None, update_tracker=False):
 	global curframe, curframe_gray, redraw, anchor
@@ -528,7 +534,7 @@ def load_this_frame(index=None, update_tracker=False):
 	curframe_gray = cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY)
 	
 	anchor = get_keyframe(src.index)
-
+	
 	print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
 
 	if update_tracker:
@@ -608,7 +614,7 @@ if __name__ == '__main__':
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
 	graphslices = iround(graphdepth * framerate)
-	src = VideoSource(srcvid, numcache=200)
+	src = VideoSource(srcvid, numcache=150)
 
 	if keyframes:
 		load_this_frame(max(keyframes)+1)
@@ -638,6 +644,8 @@ if __name__ == '__main__':
 		
 		redraw = True # init
 		while running:
+			assert not any(isinstance(v, np.ndarray) for v in keyframes.itervalues())
+				
 			if redraw:
 				redraw = False
 				redraw_display()
@@ -655,7 +663,7 @@ if __name__ == '__main__':
 				load_delta_frame(sgn(playspeed))
 
 				if mousedown:
-					keyframes[src.index] = anchor.tolist()
+					keyframes[src.index] = anchor
 				else:
 					#anchor = keyframes.get(src.index, anchor)
 					anchor = get_keyframe(src.index)
@@ -753,11 +761,18 @@ if __name__ == '__main__':
 				print "speed: {0}".format(playspeed)
 				sched = time.clock()
 
-			if key in (VK_SPACE, ord('k')):
+			if key == ord('k'):
 				if abs(playspeed) > 1e-3:
 					playspeed = 0.0
 				else:
 					playspeed = 1.0
+					sched = time.clock()
+			
+			if key == VK_SPACE:
+				if abs(playspeed) > 1e-3:
+					playspeed = 0.0
+				else:
+					playspeed = 10
 					sched = time.clock()
 			
 			if key == ord('t'):
