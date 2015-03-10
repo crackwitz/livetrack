@@ -104,8 +104,12 @@ class MOSSE:
         vis = np.hstack([self.last_img, kernel, resp])
         return vis
 
-    def draw_state(self, vis):
+    def draw_state(self, vis, scale=1):
         (x, y), (w, h) = self.pos, self.size
+        x *= scale
+        y *= scale
+        w *= scale
+        h *= scale
         x1, y1, x2, y2 = int(x-0.5*w), int(y-0.5*h), int(x+0.5*w), int(y+0.5*h)
         cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 0, 255), thickness=2)
         if self.good:

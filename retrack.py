@@ -84,13 +84,12 @@ class VideoSource(object):
 			
 			#print "reading frame {0}".format(newindex)
 			(rv,frame) = self.vid.read()
-			if rv:
-				self.cache[newindex] = frame
-				#self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
+			assert rv
+			self.cache[newindex] = frame
+			#self.stripes[newindex] = getslice(frame, keyframes.get(newindex, None))
 			
-			self.mru = [i for i in self.mru if i != newindex] + [newindex]
-		
-		
+		self.mru = [i for i in self.mru if i != newindex] + [newindex]
+			
 		self.mru = self.mru[-self.numcache:]
 		self.cache = { i: frame for i,frame in self.cache.iteritems() if i in self.mru }
 		#self.stripes = {i: self.stripes[i] for i in self.mru}
@@ -118,6 +117,11 @@ def iround(x):
 
 def sgn(x):
 	return (x > 0) - (x < 0)
+
+def clamp(low, high, value):
+	if value < low: return low
+	if value > high: return high
+	return value
 
 def redraw_display():
 	#print "redraw"
@@ -227,7 +231,7 @@ def redraw_display():
 		tracker_rectsel.draw(source)
 	
 	if tracker:
-		tracker.draw_state(source)
+		tracker.draw_state(source, trackerscale)
 		cv2.imshow('tracker state', tracker.state_vis)
 	
 	cv2.imshow("source", source)
@@ -244,7 +248,7 @@ def redraw_display():
 		if graphbg is None: # full redraw
 			t0 = time.clock()
 			graphbg = [
-				src.cache[i][get_keyframe(i)[1]] if i in src.cache else emptyrow
+				src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])] if (i in src.cache) else emptyrow
 				for i in indices
 			]
 			t1 = time.clock()
@@ -277,7 +281,7 @@ def redraw_display():
 			
 			t2 = time.clock()
 			replacements = [
-				src.cache[i][get_keyframe(i)[1]] if i in src.cache else emptyrow
+				src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])] if (i in src.cache) else emptyrow
 				for i in newindices
 			]
 			graphbg_indices.update( set(newindices) & set(src.cache) )
@@ -296,7 +300,7 @@ def redraw_display():
 		updates = (set(indices) & set(src.cache)) - graphbg_indices
 		if updates:
 			for i in updates:
-				graphbg[graphbg_head - i] = src.cache[i][get_keyframe(i)[1]]
+				graphbg[graphbg_head - i] = src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])]
 			graphbg_indices.update(updates)
 		
 		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
@@ -495,32 +499,33 @@ def get_keyframe(index):
 def on_tracker_rect(rect):
 	global tracker, use_tracker
 	print "rect selected:", rect
-	tracker = MOSSE(curframe_gray, rect)
-	set_cursor(*tracker.pos)
+	tracker = MOSSE(curframe_gray, tracker_downscale(rect))
+	set_cursor(*tracker_upscale(tracker.pos))
 
 def load_delta_frame(delta):
 	if delta in (-1, +1):
-		load_this_frame(src.index + delta, update_tracker=bool(tracker))
+		load_this_frame(src.index + delta, False)
 		
 		if trailing_smooth:
 			target = src.index + -5 * delta
 			keyframes[target] = smoothed_keyframe(target)
 	
 		if tracker:
-			tracker.update(curframe_gray, 0.05)
-			print "tracker updated: xy", tracker.pos
-			set_cursor(*tracker.pos)
+			tracker.update(curframe_gray, 0.2) # tweakable parameter, default 0.125
+			tpos = tracker_upscale(tracker.pos)
+			print "tracker updated: xy", tpos
+			set_cursor(*tpos)
 
 	else: # big jump
-		load_this_frame(src.index + delta)
+		load_this_frame(src.index + delta, bool(tracker))
 
-	if (delta > 0) and (graphbg_head is not None):
-		imax = graphbg_head + delta
-		imin = imax - graphslices
+	if (delta > 0) and (graphbg_head is not None) and (draw_graph):
+		imax = graphbg_head
+		imin = imax - graphslices//2
 		src.cache_range(imin, imax)
 
 
-def load_this_frame(index=None, update_tracker=False):
+def load_this_frame(index=None, update_tracker=True):
 	global curframe, curframe_gray, redraw, anchor
 	
 	if index is not None:
@@ -531,18 +536,23 @@ def load_this_frame(index=None, update_tracker=False):
 	delta = index - src.index
 		
 	curframe = src.read(index) # sets src.index
-	curframe_gray = cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY)
+	curframe_gray = cv2.pyrDown(cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY))
 	
 	anchor = get_keyframe(src.index)
 	
 	print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
 
-	if update_tracker:
+	if update_tracker and tracker:
 		print "set tracker to", tracker.pos
-		tracker.pos = anchor
+		tracker.pos = tracker_downscale(anchor)
 
 	redraw = True
 
+def tracker_upscale(point):
+	return tuple(v * trackerscale for v in point)
+
+def tracker_downscale(point):
+	return tuple(iround(v / trackerscale) for v in point)
 	
 draw_output = True
 draw_graph = True
@@ -567,6 +577,7 @@ graphheight = iround(graphdepth * graphscale)
 tracker = None
 use_tracker = False
 tracker_rectsel = RectSelector(on_tracker_rect)
+trackerscale = 2.0
 
 undoqueue = []
 
@@ -614,7 +625,7 @@ if __name__ == '__main__':
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
 	graphslices = iround(graphdepth * framerate)
-	src = VideoSource(srcvid, numcache=150)
+	src = VideoSource(srcvid, numcache=graphslices+10)
 
 	if keyframes:
 		load_this_frame(max(keyframes)+1)
