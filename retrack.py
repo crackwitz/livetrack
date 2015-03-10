@@ -419,10 +419,6 @@ def onmouse_graph(event, x, y, flags, userdata):
 			while len(undoqueue) > 100:
 				undoqueue.pop(0)
 			
-			support = 2
-			support = range(-support, +support+1)
-			
-			#import pdb; pdb.set_trace()
 			for i in indices:
 				keyframes[i] = smoothed_keyframe(i)
 			
@@ -587,7 +583,7 @@ graphheight = iround(graphdepth * graphscale)
 tracker = None
 use_tracker = False
 tracker_rectsel = RectSelector(on_tracker_rect)
-trackerscale = 2.0
+trackerscale = 2.0 # TODO: give to pyrdown
 
 undoqueue = []
 
@@ -630,7 +626,6 @@ if __name__ == '__main__':
 	assert os.path.exists(meta['source'])
 	if os.path.exists(meta['keyframes']):
 		keyframes = json.load(open(meta['keyframes']))	
-		#keyframes = {int(k): keyframes[k] for k in keyframes}
 	else:
 		keyframes = [None] * totalframes
 	
@@ -638,8 +633,9 @@ if __name__ == '__main__':
 	src = VideoSource(srcvid, numcache=graphslices+10)
 
 	if not all(k is None for k in keyframes):
-		lastkey = max(k for k in xrange(totalframes) if keyframes[k] is not None)
-		load_this_frame(lastkey+1)
+		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -1)
+		#lastkey = max(k for k in xrange(totalframes) if keyframes[k] is not None)
+		load_this_frame(lastkey)
 	else:
 		load_this_frame(0)
 
