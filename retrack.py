@@ -33,6 +33,9 @@ class VideoSource(object):
 		self.mru = [] # oldest -> newest
 	
 	def cache_range(self, start, stop):
+		if start < 0: start = 0
+		if stop >= totalframes: stop = totalframes-1
+		assert start <= stop
 		requested = range(start, stop+1)
 		requested = [i for i in requested if i not in self.cache]
 		if not requested: return
@@ -83,8 +86,10 @@ class VideoSource(object):
 			
 			#print "reading frame {0}".format(newindex)
 			(rv,frame) = self.vid.read()
-			assert rv
-			self.cache[newindex] = frame
+			if rv:
+				self.cache[newindex] = frame
+			else:
+				return
 			
 		self.mru = [i for i in self.mru if i != newindex] + [newindex]
 			
@@ -95,6 +100,9 @@ class VideoSource(object):
 	def read(self, newindex=None):
 		if newindex is None:
 			newindex = self.index + 1
+
+		if not (0 <= newindex < totalframes):
+			return
 
 		self._prefetch(newindex)
 		self.index = newindex
@@ -245,16 +253,14 @@ def redraw_display():
 			t2 = time.clock()
 			graphbg_head = imax
 			graphbg_indices = set(indices) & set(src.cache)
-
+			
 			print "graphbg redraw {0:.3f} {1:.3f}".format(t1-t0, t2-t1)
 		
 		if graphbg_head != imax: # scrolling to current position
-			t0 = time.clock()
 			shift = imax - graphbg_head
 			graphbg = np.roll(graphbg, shift, axis=0)
 			oldhead = graphbg_head
 			graphbg_head = imax
-			t1 = time.clock()
 			
 			# replace rolled-over lines
 			ashift = min(graphslices, abs(shift))
@@ -268,23 +274,16 @@ def redraw_display():
 				newindices = xrange(imin+ashift, imin, -1)
 				graphbg_indices = set(i for i in graphbg_indices if i <= imax)
 			
-			t2 = time.clock()
 			replacements = [
 				src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])] if (i in src.cache) else emptyrow
 				for i in newindices
 			]
 			graphbg_indices.update( set(newindices) & set(src.cache) )
 
-			t3 = time.clock()
-
 			if shift > 0:
 				graphbg[:ashift] = replacements
 			elif shift < 0:
 				graphbg[-ashift:] = replacements
-			
-			t4 = time.clock()
-
-			#print "graphbg roll {0:.3f} {1:.3f} {1:.3f} {1:.3f}".format(t1-t0, t2-t1, t3-t2, t4-t3)
 
 		updates = (set(indices) & set(src.cache)) - graphbg_indices
 		if updates:
@@ -294,13 +293,13 @@ def redraw_display():
 		
 		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
 
-		lineindices = [i for i in range(imin, imax+1) if keyframes[i] is not None]
+		lineindices = [i for i in range(imin, imax+1) if (0 <= i < totalframes) and keyframes[i] is not None]
 		lines = np.array([
-			( iround(keyframes[index][0]), (imax - index) * (graphscale / framerate) )
+			( iround(keyframes[index][0]), (imax - index) * graphscale )
 			for index in lineindices
 		], dtype=np.int32)
 
-		now = iround((imax - src.index) * graphscale / framerate)
+		now = iround((imax - src.index) * graphscale)
 		cv2.line(graph,
 			(0, now), (screenw, now), (255, 255, 255), thickness=2)
 
@@ -385,11 +384,8 @@ def onmouse_output(event, x, y, flags, userdata):
 def onmouse_graph(event, x, y, flags, userdata):
 	global redraw
 	
-	curindex = graphbg_head - iround(y / graphscale * framerate)
+	curindex = graphbg_head - iround(y / graphscale)
 
-#	delta = (graphdepth/2 - y / graphscale) * framerate
-#	newindex = iround(src.index + delta)
-	
 	if True:
 		global graphsmooth_start, graphsmooth_stop
 		
@@ -458,26 +454,35 @@ def save():
 
 def scan_nonempty(keyframes, pos, step):
 	if step < 0:
-		while pos >= 0:
+		while pos >= 0 and step < 0:
 			if keyframes[pos] is not None:
 				return pos
-			pos += step
+			pos -= 1
+			step += 1
+		else:
+			return None
 
 	elif step > 0:
-		while pos < len(keyframes):
+		while pos < len(keyframes) and step > 0:
 			if keyframes[pos] is not None:
 				return pos
-			pos += step
+			pos += 1
+			step -= 1
+		else:
+			return None
 	
 	return None
 
 def get_keyframe(index):
+	if not (0 <= index < totalframes):
+		return meta['anchor']
+	
 	if keyframes[index] is not None:
 		return keyframes[index]
 
 	else:
-		prev = scan_nonempty(keyframes, index-1, -1)
-		next = scan_nonempty(keyframes, index+1, +1)
+		prev = scan_nonempty(keyframes, index-1, -100)
+		next = scan_nonempty(keyframes, index+1, +100)
 		
 		if prev is None and next is None:
 			return meta['anchor']
@@ -538,6 +543,11 @@ def load_this_frame(index=None, update_tracker=True):
 		pass
 	else:
 		index = src.index
+	
+	if not (0 <= index < totalframes):
+		print "load_this_frame(): out of bounds:", index
+		assert 0
+		return
 
 	delta = index - src.index
 		
@@ -574,11 +584,11 @@ graphsmooth_stop = None
 
 trailing_smooth = False
 
-graphdepth = 5.0
-graphscale = 150 # pixels per second
+graphslices = 125
+graphscale = 6 # pixels per frame
 # graphslices
 
-graphheight = iround(graphdepth * graphscale)
+graphheight = iround(graphslices * graphscale)
 
 tracker = None
 use_tracker = False
@@ -629,11 +639,10 @@ if __name__ == '__main__':
 	else:
 		keyframes = [None] * totalframes
 	
-	graphslices = iround(graphdepth * framerate)
 	src = VideoSource(srcvid, numcache=graphslices+10)
-
+	
 	if not all(k is None for k in keyframes):
-		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -1)
+		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -totalframes)
 		#lastkey = max(k for k in xrange(totalframes) if keyframes[k] is not None)
 		load_this_frame(lastkey)
 	else:
