@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import numpy as np
+import scipy.ndimage
 import cv2
 import json
 import pprint; pp = pprint.pprint
@@ -21,6 +22,41 @@ def getslice(frame, anchor):
 		y = iround(frame.shape[0] * 0.333)
 	#return (frame.sum(axis=0) / frame.shape[1]).astype(np.uint8)
 	return frame[y]
+
+class RateChangedVideo(object):
+	"reads the last of every n frames"
+	
+	def __init__(self, vid, decimate=1):
+		self.vid = vid
+		self.decimate = decimate
+	
+	def grab(self):
+		for i in xrange(self.decimate):
+			rv = self.vid.grab()
+			if not rv: return False
+
+		return True
+	
+	def retrieve(self):
+		(rv, frame) = self.vid.retrieve()
+		return (rv, frame)
+
+	def read(self):
+		rv = self.grab()
+		if not rv: return (False, None)
+		
+		(rv, frame) = self.retrieve()
+		return (rv, frame)
+	
+	def seek(self, pos):
+		pos = (int(pos)+1) * self.decimate - 1
+		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, pos)
+	
+	def tell(self):
+		pos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
+		pos //= self.decimate
+		return pos
+
 
 class VideoSource(object):
 	def __init__(self, vid, numcache=100, numstep=25):
@@ -42,10 +78,10 @@ class VideoSource(object):
 		start = min(requested)
 		stop = max(requested)
 		requested = range(start, stop+1)
-		vidpos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
+		vidpos = self.vid.tell()
 		if start != vidpos:
 			print "cache_range: seeking from {0} to {1}".format(vidpos, start)
-			self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, start)
+			self.vid.seek(start)
 		for i in requested:
 			rv = self.vid.grab()
 			if not rv: continue
@@ -65,7 +101,7 @@ class VideoSource(object):
 			if do_prefetch:
 				upcoming = range(newindex-self.numstep, newindex+1)
 				print "prefetching"
-				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex-self.numstep)
+				self.vid.seek(newindex-self.numstep)
 				for i in upcoming:
 					if i in self.cache:
 						#print "grabbing frame {0}".format(i)
@@ -79,10 +115,10 @@ class VideoSource(object):
 				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
 		
 		if newindex not in self.cache:
-			vidpos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
+			vidpos = self.vid.tell()
 			if vidpos != newindex:
 				print "seeking to {0}".format(newindex)
-				self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, newindex)
+				self.vid.seek(newindex)
 			
 			#print "reading frame {0}".format(newindex)
 			(rv,frame) = self.vid.read()
@@ -102,10 +138,13 @@ class VideoSource(object):
 			newindex = self.index + 1
 
 		if not (0 <= newindex < totalframes):
-			return
+			return None
 
 		self._prefetch(newindex)
 		self.index = newindex
+		
+		if self.index not in self.cache:
+			return None
 		
 		return self.cache[self.index]
 
@@ -316,22 +355,24 @@ def redraw_display():
 				
 				points = np.array(map(get_keyframe, [i-1, i, i+1]))
 				
-				d2 = np.linalg.norm((points[0]+points[2])/2 - points[1])
+				d2 = (points[0]+points[2])/2.0 - points[1]
+				d2 *= 100
 				
-				spread = 10 # todo: some way to tell if this was raw or smoothed
-				spread = 5 + iround(d2 * 20)
-				
+				spread = d2[0]
+				spread = np.array([max(-spread, 0), max(spread, 0)]) + 5
+				spread += abs(d2[1])
+
 				thickness = 1
 				color = (0, 255, 255)
 				if graphsmooth_start is not None:
 					if graphsmooth_start <= i <= graphsmooth_stop:
 						thickness = 3
 						color = (255,255,255)
-						spread += 5
+						spread += 3
 					
 				cv2.line(
 					graph,
-					(x-spread, y), (x+spread, y),
+					(x-int(spread[0]), y), (x+int(spread[1]), y),
 					color,
 					thickness=thickness)
 
@@ -415,8 +456,8 @@ def onmouse_graph(event, x, y, flags, userdata):
 			while len(undoqueue) > 100:
 				undoqueue.pop(0)
 			
-			for i in indices:
-				keyframes[i] = smoothed_keyframe(i)
+			updates = { i: smoothed_keyframe(i) for i in indices }
+			for i in indices: keyframes[i] = updates[i]
 			
 			graphsmooth_start = None
 
@@ -502,7 +543,7 @@ def get_keyframe(index):
 def on_tracker_rect(rect):
 	global tracker, use_tracker
 	print "rect selected:", rect
-	tracker = MOSSE(curframe_gray, tracker_downscale(rect))
+	tracker = MOSSE(curframe_gray, map(iround, tracker_downscale(rect)))
 	set_cursor(*tracker_upscale(tracker.pos))
 
 def load_delta_frame(delta):
@@ -544,10 +585,7 @@ def load_this_frame(index=None, update_tracker=True):
 	else:
 		index = src.index
 	
-	if not (0 <= index < totalframes):
-		print "load_this_frame(): out of bounds:", index
-		assert 0
-		return
+	index = clamp(0, totalframes-1, index)
 
 	delta = index - src.index
 		
@@ -568,8 +606,85 @@ def tracker_upscale(point):
 	return tuple(v * trackerscale for v in point)
 
 def tracker_downscale(point):
-	return tuple(iround(v / trackerscale) for v in point)
+	return tuple(v / trackerscale for v in point)
+
+def dump_video(videodest):
+	output = np.zeros((totalframes, 2), dtype=np.float32)
+
+	prevgood = None
+	nextgood = None
+	for i in xrange(totalframes):
+		output[i] = get_keyframe(i)
+
+	(xmin, xmax) = meta['anchor_x_range']
 	
+	output[output[:,0] < xmin] = xmin
+	output[output[:,0] > xmax] = xmax
+	output[:,1] = meta['anchor'][1]
+	
+	sigma = meta.get('sigma', 0)
+	
+	if sigma > 0:
+		sigma *= framerate
+		output[:,0] = scipy.ndimage.filters.gaussian_filter(output[:,0], sigma)
+
+	outseq = 1
+	outvid = None
+	
+	for i,k in enumerate(output):
+		if i % int(600 * framerate) == 0 and outvid is not None:
+			outvid.release()
+			outvid = None
+			outseq += 1
+
+		if outvid is None:
+			outvid = cv2.VideoWriter(videodest % outseq, cv2.cv.FOURCC(*"X264"), framerate, (screenw, screenh))
+			assert outvid.isOpened()
+
+		load_this_frame(i)
+		
+		# anchor is animated
+		(ax,ay) = k
+
+		Anchor = np.matrix([
+			[1, 0, -ax],
+			[0, 1, -ay],
+			[0, 0, 1.0],
+		])
+		InvAnchor = np.linalg.inv(Anchor)
+		scale = meta['scale']
+		Scale = np.matrix([
+			[scale, 0, 0],
+			[0, scale, 0],
+			[0, 0, 1.0]
+		])
+
+		# position is fixed in meta
+		Translate = np.matrix([
+			[1, 0, position[0]],
+			[0, 1, position[1]],
+			[0, 0, 1.0]
+		])
+
+		M = Translate * Scale * Anchor
+		InvM = np.linalg.inv(M)
+
+		viewbox = meta['viewbox']
+
+		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_CUBIC)
+		
+		cv2.imshow("rendered", cv2.pyrDown(surface))
+		
+		outvid.write(surface)
+		print "frame {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes)
+
+		key = cv2.waitKey(1)
+		if key == 27: break
+
+	cv2.destroyWindow("rendered")
+	outvid.release()
+	print "done"
+
 draw_output = True
 draw_graph = True
 
@@ -598,33 +713,27 @@ trackerscale = 2.0 # TODO: give to pyrdown
 undoqueue = []
 
 if __name__ == '__main__':
+	do_dump = False
+	if sys.argv[1] == 'dump':
+		do_dump = True
+		videodest = sys.argv[3]
+		sys.argv.pop(3)
+		sys.argv.pop(1)
+		
+		print sys.argv
+	
 	metafile = sys.argv[1]
 	
-	if os.path.exists(metafile):
-		meta = json.load(open(metafile))
-	else:
-		meta = {}
+	assert os.path.exists(metafile)
+	meta = json.load(open(metafile))
 
-#	for pair in sys.argv[2:]:
-#		(key, value) = pair.split("=", 1)
-#		print key, value
-#		meta[key] = value
-
-	print json.dumps(meta, indent=2, sort_keys=True)
-	
 	screenw, screenh = meta['screen']
 	position = meta['position']
 	anchor = meta['anchor']
 
 	emptyrow = np.uint8([(0,0,0)] * screenw)
 	
-	# TODO: range of anchor such that viewbox inside video
-
-	# smoothed anchor on top of that, extra value
-	# needs state/history of anchor values, at least for back stepping
-	#controller = PID(P=1.0, I=1.0, D=1.0)
-	#controller.set_point = anchor[0]
-	
+	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
 	
 	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
@@ -633,13 +742,32 @@ if __name__ == '__main__':
 	srcw = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
 	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
 	
-	assert os.path.exists(meta['source'])
+	decimate = 1
+	while framerate / decimate > 30:
+		decimate += 1
+	srcvid = RateChangedVideo(srcvid, decimate=decimate)
+	
+	framerate /= decimate
+	totalframes //= decimate
+
+	print "{0} fps effective".format(framerate)
+
+	meta['source_fps'] = framerate
+	meta['source_framecount'] = totalframes
+	meta['source_wh'] = (srcw, srch)
+	
+	print json.dumps(meta, indent=2, sort_keys=True)
+	
 	if os.path.exists(meta['keyframes']):
 		keyframes = json.load(open(meta['keyframes']))	
 	else:
 		keyframes = [None] * totalframes
 	
 	src = VideoSource(srcvid, numcache=graphslices+10)
+	
+	if do_dump:
+		dump_video(videodest)
+		sys.exit(0)
 	
 	if not all(k is None for k in keyframes):
 		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -totalframes)
