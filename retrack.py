@@ -227,51 +227,53 @@ def redraw_display():
 
 		cv2.imshow("output", surface)
 
+	if draw_input:
+		source = curframe.copy()
 
-	source = curframe.copy()
-	
-	cv2.line(source,
-		(axi-10, ayi-10),
-		(axi+10, ayi+10), 
-		cursorcolor,  thickness=2)
-	cv2.line(source,
-		(axi+10, ayi-10),
-		(axi-10, ayi+10), 
-		cursorcolor,  thickness=2)
-	
-	# todo: transform using inverse M
-	TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
-	BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
-	
-	TL = tuple(map(iround, np.array(TL[0:2,0].T).tolist()[0]))
-	BR = tuple(map(iround, np.array(BR[0:2,0].T).tolist()[0]))
-	
-	cv2.rectangle(source,
-		TL, BR,
-		(255, 0, 0), thickness=2)
+		cv2.line(source,
+			(axi-10, ayi-10),
+			(axi+10, ayi+10), 
+			cursorcolor,  thickness=2)
+		cv2.line(source,
+			(axi+10, ayi-10),
+			(axi-10, ayi+10), 
+			cursorcolor,  thickness=2)
 
-	secs = src.index / framerate
-	hours, secs = divmod(secs, 3600)
-	mins, secs = divmod(secs, 60)
-	cv2.rectangle(source,
-		(0, screenh), (screenw, screenh-70),
-		(0,0,0),
-		cv2.cv.CV_FILLED
-		)
-	text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
-	cv2.putText(source,
-		text,
-		(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
+		TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
+		BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
+
+		TL = tuple(map(iround, np.array(TL[0:2,0].T).tolist()[0]))
+		BR = tuple(map(iround, np.array(BR[0:2,0].T).tolist()[0]))
+
+		cv2.rectangle(source,
+			TL, BR,
+			(255, 0, 0), thickness=2)
+
+		secs = src.index / framerate
+		hours, secs = divmod(secs, 3600)
+		mins, secs = divmod(secs, 60)
+		cv2.rectangle(source,
+			(0, screenh), (screenw, screenh-70),
+			(0,0,0),
+			cv2.cv.CV_FILLED
+			)
+		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
+		cv2.putText(source,
+			text,
+			(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
+
+		if use_tracker:
+			tracker_rectsel.draw(source)
+
+		if tracker:
+			tracker.draw_state(source, trackerscale)
+
+		cv2.imshow("source", source)
 	
-	if use_tracker:
-		tracker_rectsel.draw(source)
-	
-	if tracker:
-		tracker.draw_state(source, trackerscale)
+
+	if tracker and draw_tracker:
 		cv2.imshow('tracker state', tracker.state_vis)
-	
-	cv2.imshow("source", source)
-	
+
 	if draw_graph:
 		global graphbg, graphbg_head, graphbg_indices
 		# graphslices/2 is midpoint
@@ -463,7 +465,7 @@ def onmouse_graph(event, x, y, flags, userdata):
 
 	if graphdraw:
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
-			(ax,ay) = get_keyframe(src.index)
+			(ax,ay) = get_keyframe(curindex)
 			ax = x
 			keyframes[curindex] = (ax, ay)
 			redraw = True
@@ -556,7 +558,7 @@ def load_delta_frame(delta):
 			target = src.index + -5 * delta
 			keyframes[target] = smoothed_keyframe(target)
 	
-		if tracker:
+		if tracker and (curframe is not None):
 			global playspeed
 			tracker.update(curframe_gray, 0.2) # tweakable parameter, default 0.125
 			#print "tracker updated: xy", tpos
@@ -569,6 +571,9 @@ def load_delta_frame(delta):
 
 	else: # big jump
 		load_this_frame(src.index + delta, bool(tracker))
+
+	if curframe is None:
+		return True # stop
 
 	if (delta > 0) and (graphbg_head is not None) and (draw_graph):
 		imax = graphbg_head
@@ -585,11 +590,16 @@ def load_this_frame(index=None, update_tracker=True):
 	else:
 		index = src.index
 	
-	index = clamp(0, totalframes-1, index)
+	if not (0 <= index < totalframes):
+		curframe = None
+		return
 
 	delta = index - src.index
 		
 	curframe = src.read(index) # sets src.index
+	if curframe is None:
+		return
+
 	curframe_gray = cv2.pyrDown(cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY))
 	
 	anchor = get_keyframe(src.index)
@@ -638,7 +648,9 @@ def dump_video(videodest):
 			outseq += 1
 
 		if outvid is None:
-			outvid = cv2.VideoWriter(videodest % outseq, cv2.cv.FOURCC(*"X264"), framerate, (screenw, screenh))
+			fourcc = cv2.cv.FOURCC(*"X264")
+			#fourcc = -1
+			outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			assert outvid.isOpened()
 
 		load_this_frame(i)
@@ -685,8 +697,10 @@ def dump_video(videodest):
 	outvid.release()
 	print "done"
 
+draw_input = True
 draw_output = True
 draw_graph = True
+draw_tracker = True
 
 graphbg = None
 graphbg_head = None
@@ -748,7 +762,9 @@ if __name__ == '__main__':
 	srcvid = RateChangedVideo(srcvid, decimate=decimate)
 	
 	framerate /= decimate
+	
 	totalframes //= decimate
+	totalframes -= (decimate > 1)
 
 	print "{0} fps effective".format(framerate)
 
@@ -780,16 +796,16 @@ if __name__ == '__main__':
 	
 	try:
 		cv2.namedWindow("source", cv2.WINDOW_NORMAL)
-		if draw_output: cv2.namedWindow("output", cv2.WINDOW_NORMAL)
-		if draw_graph: cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
+		cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
 
 		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
-		if draw_output: cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
-		if draw_graph: cv2.resizeWindow("graph", int(screenw/2), graphheight)
+		cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
+		cv2.resizeWindow("graph", int(screenw/2), graphheight)
 
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
-		if draw_output: cv2.setMouseCallback("output", onmouse_output) # for seeking
-		if draw_graph: cv2.setMouseCallback("graph", onmouse_graph)
+		cv2.setMouseCallback("output", onmouse_output) # for seeking
+		cv2.setMouseCallback("graph", onmouse_graph)
 		
 		mousedown = False # override during mousedown
 
@@ -876,14 +892,24 @@ if __name__ == '__main__':
 				redraw = True
 				graphbg = None
 			
-			if key == ord('g'):
+			if key == ord('1'):
+				draw_input = not draw_input
+				if draw_input:
+					redraw = True
+
+			if key == ord('2'):
+				draw_output = not draw_output
+				if draw_output:
+					redraw = True
+				
+			if key == ord('3'):
 				draw_graph = not draw_graph
 				if draw_graph:
 					redraw = True
 				
-			if key == ord('o'):
-				draw_output = not draw_output
-				if draw_output:
+			if key == ord('4'):
+				draw_tracker = not draw_tracker
+				if draw_tracker:
 					redraw = True
 				
 			if key == ord('s'):
