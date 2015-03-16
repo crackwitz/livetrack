@@ -488,12 +488,44 @@ def set_cursor(x, y):
 	redraw = True
 	#print "set cursor", anchor
 
-def save():
+def save(do_query=False):
+	# meta file
 	output = json.dumps(meta, indent=2, sort_keys=True)
-	open(metafile, "w").write(output)
+
+	do_write = True
+	exists = os.path.exists(metafile)
 	
+	if exists:
+		do_write &= (open(metafile).read() != output)
+
+	if do_query and do_write:
+		do_write &= (raw_input("write meta file? (y/n) ").lower().startswith('y'))
+
+	if do_write:
+		if exists:
+			os.rename(metafile, "{0}.bak".format(metafile))
+
+		open(metafile, "w").write(output)
+		print "wrote metafile"
+	
+	# keyframes
 	output = json.dumps(keyframes, indent=2, sort_keys=True)
-	open(meta['keyframes'], 'w').write(output)
+	
+	do_write = True
+	exists = os.path.exists(meta['keyframes'])
+	
+	if exists:
+		do_write &= (open(meta['keyframes']).read() != output)
+		
+	if do_query and do_write:
+		do_write &= (raw_input("write keyframes? (y/n) ").lower().startswith('y'))
+
+	if do_write:
+		if exists:
+			os.rename(meta['keyframes'], "{0}.bak".format(meta['keyframes']))
+
+		open(meta['keyframes'], "w").write(output)
+		print "wrote keyframes"
 
 def scan_nonempty(keyframes, pos, step):
 	if step < 0:
@@ -648,8 +680,11 @@ def dump_video(videodest):
 			outseq += 1
 
 		if outvid is None:
-			fourcc = cv2.cv.FOURCC(*"X264")
-			#fourcc = -1
+			if i == 0:
+				fourcc = -1 # user config
+			else:
+				fourcc = cv2.cv.FOURCC(*"X264")
+				
 			outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			assert outvid.isOpened()
 
@@ -981,4 +1016,4 @@ if __name__ == '__main__':
 		cv2.destroyWindow("source")
 		cv2.destroyWindow("output")
 		cv2.destroyWindow("graph")
-		save()
+		save(do_query=True)
