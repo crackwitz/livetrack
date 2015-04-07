@@ -227,7 +227,7 @@ def redraw_display():
 
 		cv2.imshow("output", surface)
 
-	if draw_input:
+	if draw_input and curframe is not None:
 		source = curframe.copy()
 
 		cv2.line(source,
@@ -503,7 +503,10 @@ def save(do_query=False):
 
 	if do_write:
 		if exists:
-			os.rename(metafile, "{0}.bak".format(metafile))
+			bakfile = "{0}.bak".format(metafile)
+			if os.path.exists(bakfile):
+				os.unlink(bakfile)
+			os.rename(metafile, bakfile)
 
 		open(metafile, "w").write(output)
 		print "wrote metafile"
@@ -522,7 +525,10 @@ def save(do_query=False):
 
 	if do_write:
 		if exists:
-			os.rename(meta['keyframes'], "{0}.bak".format(meta['keyframes']))
+			bakfile = "{0}.bak".format(meta['keyframes'])
+			if os.path.exists(bakfile):
+				os.unlink(bakfile)
+			os.rename(meta['keyframes'], bakfile)
 
 		open(meta['keyframes'], "w").write(output)
 		print "wrote keyframes"
