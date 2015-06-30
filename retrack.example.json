@@ -1,0 +1,28 @@
+{
+  "anchor": [
+    960, 
+    540
+  ], 
+  "anchor_x_range": [
+    427, 
+    1493
+  ], 
+  "keyframes": "retrack-keyframes.json", 
+  "position": [
+    320, 
+    540
+  ], 
+  "scale": 0.75, 
+  "screen": [
+    640, 
+    1080
+  ], 
+  "sigma": 2.0, 
+  "source": "input.m2ts", 
+  "viewbox": [
+    0, 
+    0, 
+    640, 
+    1080
+  ]
+}

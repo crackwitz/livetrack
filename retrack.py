@@ -332,7 +332,7 @@ def redraw_display():
 				graphbg[graphbg_head - i] = src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])]
 			graphbg_indices.update(updates)
 		
-		graph = cv2.resize(graphbg, (screenw, graphheight), interpolation=cv2.INTER_NEAREST)
+		graph = cv2.resize(graphbg, (srcw, graphheight), interpolation=cv2.INTER_NEAREST)
 
 		lineindices = [i for i in range(imin, imax+1) if (0 <= i < totalframes) and keyframes[i] is not None]
 		lines = np.array([
@@ -342,7 +342,7 @@ def redraw_display():
 
 		now = iround((imax - src.index) * graphscale)
 		cv2.line(graph,
-			(0, now), (screenw, now), (255, 255, 255), thickness=2)
+			(0, now), (srcw, now), (255, 255, 255), thickness=2)
 
 		if lines.shape[0] > 0:
 			cv2.polylines(
@@ -786,17 +786,17 @@ if __name__ == '__main__':
 	position = meta['position']
 	anchor = meta['anchor']
 
-	emptyrow = np.uint8([(0,0,0)] * screenw)
-	
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
 	
 	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
 	totalframes = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
 	print "{0} fps".format(framerate)
-	srcw = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH)
-	srch = srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT)
-	
+	srcw = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH))
+	srch = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT))
+
+	emptyrow = np.uint8([(0,0,0)] * srcw)
+
 	decimate = 1
 	while framerate / decimate > 30:
 		decimate += 1
@@ -842,7 +842,7 @@ if __name__ == '__main__':
 
 		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
 		cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
-		cv2.resizeWindow("graph", int(screenw/2), graphheight)
+		cv2.resizeWindow("graph", int(srcw/2), graphheight)
 
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
 		cv2.setMouseCallback("output", onmouse_output) # for seeking
