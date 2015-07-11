@@ -622,7 +622,7 @@ def load_delta_frame(delta):
 	
 	return result
 
-def load_this_frame(index=None, update_tracker=True):
+def load_this_frame(index=None, update_tracker=True, only_decode=False):
 	global curframe, curframe_gray, redraw, anchor
 	
 	if index is not None:
@@ -640,13 +640,14 @@ def load_this_frame(index=None, update_tracker=True):
 	if curframe is None:
 		return
 
-	curframe_gray = cv2.pyrDown(cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY))
+	if not only_decode:
+		curframe_gray = cv2.pyrDown(cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY))
 	
 	anchor = get_keyframe(src.index)
 	
 	#print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
 
-	if update_tracker and tracker:
+	if update_tracker and tracker and not only_decode:
 		print "set tracker to", tracker.pos
 		tracker.pos = tracker_downscale(anchor)
 
@@ -698,12 +699,12 @@ def dump_video(videodest):
 				videodest,
 				framerate, (screenw, screenh),
 				codec='libx264', pixfmt='yuv420p',
-				moreflags='-crf 15 -preset ultrafast')
+				moreflags='-loglevel 32 -crf 15 -preset ultrafast')
 			#outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			#assert outvid.isOpened()
 
-		load_this_frame(i)
-		
+		load_this_frame(i, only_decode=True)
+
 		# anchor is animated
 		(ax,ay) = k
 
@@ -732,12 +733,13 @@ def dump_video(videodest):
 
 		viewbox = meta['viewbox']
 
-		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_CUBIC)
+		#surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_CUBIC)
+		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_LINEAR)
 		
 		outvid.write(surface)
 
 		if i % 10 == 0:
-			sys.stdout.write("\rframe {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes))
+			#sys.stdout.write("\rframe {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes))
 			sys.stdout.flush()
 			cv2.imshow("rendered", cv2.pyrDown(surface))
 			key = cv2.waitKey(1)
@@ -829,11 +831,12 @@ if __name__ == '__main__':
 	else:
 		keyframes = [None] * totalframes
 	
-	src = VideoSource(srcvid, numcache=graphslices+10)
-	
 	if do_dump:
+		src = VideoSource(srcvid, numcache=10)
 		dump_video(videodest)
 		sys.exit(0)
+	
+	src = VideoSource(srcvid, numcache=graphslices+10)
 	
 	if not all(k is None for k in keyframes):
 		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -totalframes)
