@@ -11,6 +11,8 @@ import pprint; pp = pprint.pprint
 from mosse import MOSSE
 from opencv_common import RectSelector
 
+import ffwriter
+
 ########################################################################
 
 def getslice(frame, anchor):
@@ -691,8 +693,9 @@ def dump_video(videodest):
 			else:
 				fourcc = cv2.cv.FOURCC(*"X264")
 				
-			outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
-			assert outvid.isOpened()
+			outvid = ffwriter.FFWriter(videodest % outseq, framerate, (screenw, screenh), 'yuv420p', '-crf 15 -preset ultrafast')
+			#outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
+			#assert outvid.isOpened()
 
 		load_this_frame(i)
 		
@@ -726,13 +729,13 @@ def dump_video(videodest):
 
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_CUBIC)
 		
-		cv2.imshow("rendered", cv2.pyrDown(surface))
-		
 		outvid.write(surface)
-		print "frame {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes)
 
-		key = cv2.waitKey(1)
-		if key == 27: break
+		if i % 10 == 0:
+			#print "frame {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes)
+			cv2.imshow("rendered", cv2.pyrDown(surface))
+			key = cv2.waitKey(1)
+			if key == 27: break
 
 	cv2.destroyWindow("rendered")
 	outvid.release()
