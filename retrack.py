@@ -678,11 +678,12 @@ def dump_video(videodest):
 		sigma *= framerate
 		output[:,0] = scipy.ndimage.filters.gaussian_filter(output[:,0], sigma)
 
+	do_pieces = ('%' in videodest)
 	outseq = 1
 	outvid = None
 	
 	for i,k in enumerate(output):
-		if i % int(600 * framerate) == 0 and outvid is not None:
+		if do_pieces and (i % int(600 * framerate) == 0) and (outvid is not None):
 			outvid.release()
 			outvid = None
 			outseq += 1
@@ -693,7 +694,11 @@ def dump_video(videodest):
 			else:
 				fourcc = cv2.cv.FOURCC(*"X264")
 				
-			outvid = ffwriter.FFWriter(videodest % outseq, framerate, (screenw, screenh), 'yuv420p', '-crf 15 -preset ultrafast')
+			outvid = ffwriter.FFWriter(
+				videodest,
+				framerate, (screenw, screenh),
+				codec='libx264', pixfmt='yuv420p',
+				moreflags='-crf 15 -preset ultrafast')
 			#outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			#assert outvid.isOpened()
 
@@ -732,7 +737,8 @@ def dump_video(videodest):
 		outvid.write(surface)
 
 		if i % 10 == 0:
-			#print "frame {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes)
+			sys.stdout.write("\rframe {0} of {1} written ({2:.3f}%)".format(i, totalframes, 100.0 * i/totalframes))
+			sys.stdout.flush()
 			cv2.imshow("rendered", cv2.pyrDown(surface))
 			key = cv2.waitKey(1)
 			if key == 27: break

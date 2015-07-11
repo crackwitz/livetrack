@@ -10,13 +10,13 @@ class NullFile(object):
 		pass
 
 class FFWriter(object):
-	def __init__(self, fname, fps, (width, height), pixfmt=None, moreflags=''):
+	def __init__(self, fname, fps, (width, height), codec='libx264', pixfmt=None, moreflags=''):
 		self.width = width
 		self.height = height
 
 		self.proc = subprocess.Popen([
 			"ffmpeg",
-			#'-loglevel', '32',
+			'-loglevel', 'warning',
 			'-f', 'rawvideo',
 			'-pix_fmt', 'bgr24',
 			'-s', '{0}x{1}'.format(width, height),
@@ -26,7 +26,7 @@ class FFWriter(object):
 			'-pix_fmt', pixfmt
 			#'-filter:v', 'format=pix_fmts={0}'.format(pixfmt or '')
 		] * (pixfmt is not None)) + [
-			'-c:v', 'libx264'
+			'-c:v', codec,
 		] + (moreflags.split() if isinstance(moreflags, str) else moreflags) + [
 			'-y',
 			fname
@@ -45,6 +45,9 @@ class FFWriter(object):
 	def close(self):
 		self.proc.stdin.close()
 		return self.proc.wait()
+
+	def release(self):
+		self.close()
 
 	def __del__(self):
 		self.close()
