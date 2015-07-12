@@ -2,8 +2,8 @@ import numpy as np
 import cv2
 
 def draw_str(dst, (x, y), s):
-	cv2.putText(dst, s, (x+1, y+1), cv2.FONT_HERSHEY_PLAIN, 2.0, (0, 0, 0), thickness = 4, lineType=cv2.CV_AA)
-	cv2.putText(dst, s, (x, y), cv2.FONT_HERSHEY_PLAIN, 2.0, (255, 255, 255), thickness=2, lineType=cv2.CV_AA)
+	cv2.putText(dst, s, (x+1, y+1), cv2.FONT_HERSHEY_PLAIN, 2.0, (0, 0, 0), thickness = 4, lineType=cv2.LINE_AA)
+	cv2.putText(dst, s, (x, y), cv2.FONT_HERSHEY_PLAIN, 2.0, (255, 255, 255), thickness=2, lineType=cv2.LINE_AA)
 
 class RectSelector:
 	def __init__(self, callback):

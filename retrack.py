@@ -52,10 +52,10 @@ class RateChangedVideo(object):
 	
 	def seek(self, pos):
 		pos = (int(pos)+1) * self.decimate - 1
-		self.vid.set(cv2.cv.CV_CAP_PROP_POS_FRAMES, pos)
+		self.vid.set(cv2.CAP_PROP_POS_FRAMES, pos)
 	
 	def tell(self):
-		pos = int(self.vid.get(cv2.cv.CV_CAP_PROP_POS_FRAMES))
+		pos = int(self.vid.get(cv2.CAP_PROP_POS_FRAMES))
 		pos //= self.decimate
 		return pos
 
@@ -257,7 +257,7 @@ def redraw_display():
 		cv2.rectangle(source,
 			(0, screenh), (screenw, screenh-70),
 			(0,0,0),
-			cv2.cv.CV_FILLED
+			cv2.FILLED
 			)
 		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
 		cv2.putText(source,
@@ -386,7 +386,7 @@ def redraw_display():
 		#cv2.rectangle(graph,
 		#	(0, screenh), (screenw, screenh-70),
 		#	(0,0,0),
-		#	cv2.cv.CV_FILLED
+		#	cv2.FILLED
 		#	)
 		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
 		cv2.putText(graph,
@@ -699,7 +699,7 @@ def dump_video(videodest):
 			if i == 0:
 				fourcc = -1 # user config
 			else:
-				fourcc = cv2.cv.FOURCC(*"X264")
+				fourcc = cv2.VideoWriter_fourcc(*"X264")
 				
 			outvid = ffwriter.FFWriter(
 				videodest,
@@ -806,11 +806,11 @@ if __name__ == '__main__':
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
 	
-	framerate = srcvid.get(cv2.cv.CV_CAP_PROP_FPS)
-	totalframes = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_COUNT))
+	framerate = srcvid.get(cv2.CAP_PROP_FPS)
+	totalframes = int(srcvid.get(cv2.CAP_PROP_FRAME_COUNT))
 	print "{0} fps".format(framerate)
-	srcw = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH))
-	srch = int(srcvid.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT))
+	srcw = int(srcvid.get(cv2.CAP_PROP_FRAME_WIDTH))
+	srch = int(srcvid.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 	emptyrow = np.uint8([(0,0,0)] * srcw)
 
