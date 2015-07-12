@@ -72,16 +72,19 @@ class MOSSE:
         self.update_kernel()
         self.update(frame)
 
-    def update(self, frame, rate = 0.125):
+    def track(self, frame):
         (x, y), (w, h) = self.pos, self.size
         self.last_img = img = cv2.getRectSubPix(frame, (w, h), (x, y))
         img = self.preprocess(img)
         self.last_resp, (dx, dy), self.psr = self.correlate(img)
         self.good = self.psr > 8.0
-        if not self.good:
-            return
+        return (dx, dy)
 
-        self.pos = x+dx, y+dy
+    def adapt(self, frame, rate=0.125, delta=None):
+        (x, y), (w, h) = self.pos, self.size
+        if delta is not None:
+            (dx,dy) = delta
+            self.pos = (x+dx, y+dy)
         self.last_img = img = cv2.getRectSubPix(frame, (w, h), self.pos)
         img = self.preprocess(img)
 
@@ -91,6 +94,14 @@ class MOSSE:
         self.H1 = self.H1 * (1.0-rate) + H1 * rate
         self.H2 = self.H2 * (1.0-rate) + H2 * rate
         self.update_kernel()
+
+    def update(self, frame, rate=0.125):
+        (dx,dy) = self.track(frame)
+
+        if not self.good:
+            return
+
+        self.adapt(frame, rate, delta=(dx,dy))
 
     @property
     def state_vis(self):

@@ -264,6 +264,20 @@ def redraw_display():
 			text,
 			(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
 
+		if use_faces:
+			if faces_roi is not None:
+				iroi = ((faces_roi / trackerscale).round() * trackerscale - 1).astype('int')
+
+				cv2.rectangle(source,
+					tuple(iroi[0:2]), tuple(iroi[2:4]),
+					(0, 0, 255), thickness=2)
+
+			for face in faces:
+				(x0,y0,x1,y1) = face
+				cv2.rectangle(source,
+					(x0,y0), (x1, y1),
+					(0, 255, 0), thickness=2)
+
 		if use_tracker:
 			tracker_rectsel.draw(source)
 
@@ -558,29 +572,29 @@ def scan_nonempty(keyframes, pos, step):
 
 def get_keyframe(index):
 	if not (0 <= index < totalframes):
-		return meta['anchor']
+		return np.float32(meta['anchor'])
 	
 	if keyframes[index] is not None:
-		return keyframes[index]
+		return np.float32(keyframes[index])
 
 	else:
 		prev = scan_nonempty(keyframes, index-1, -100)
 		next = scan_nonempty(keyframes, index+1, +100)
 		
 		if prev is None and next is None:
-			return meta['anchor']
+			return np.float32(meta['anchor'])
 		
 		if prev is None:
-			return keyframes[next]
+			return np.float32(keyframes[next])
 		
 		if next is None:
-			return keyframes[prev]
+			return np.float32(keyframes[prev])
 		
 		alpha = (index - prev) / (next-prev)
 		#print "alpha", alpha, index, prev, next
 		u = np.array(keyframes[prev])
 		v = np.array(keyframes[next])
-		return np.int32(0.5 + u + alpha * (v-u))
+		return np.float32(0.5 + u + alpha * (v-u))
 
 def on_tracker_rect(rect):
 	global tracker, use_tracker
@@ -589,20 +603,57 @@ def on_tracker_rect(rect):
 	set_cursor(*tracker_upscale(tracker.pos))
 
 def load_delta_frame(delta):
+	global redraw
 	result = None
 	
 	if delta in (-1, +1):
 		load_this_frame(src.index + delta, False)
 		
-		if trailing_smooth:
-			target = src.index + -5 * delta
-			keyframes[target] = smoothed_keyframe(target)
+		if curframe is not None:
+			(x,y) = (nx,ny) = anchor
+
+			adapt_rate = 0.2
+			attract_rate = 0.02
 	
-		if tracker and (curframe is not None):
-			global playspeed
-			tracker.update(curframe_gray, 0.2) # tweakable parameter, default 0.125
-			#print "tracker updated: xy", tpos
-			if tracker.good:
+			if tracker:
+				(dx,dy) = tracker.track(curframe_gray)
+				if not tracker.good:
+					result = True # stop
+					print "tracking bad, aborting"
+				else:
+					nx += dx
+					ny += dy
+
+			if use_faces: # and tracker and tracker.good:
+				global faces_roi
+				if tracker:
+					(tx,ty) = tracker.size
+					faces_roi = np.hstack([nx-tx, ny-2*ty, nx+tx, ny+ty])
+				else:
+					faces_roi = None
+
+				global faces
+				faces = detect_faces(subrect=faces_roi)
+
+				if tracker and tracker.good and len(faces) >= 1:
+					faces.sort(key=lambda face: np.linalg.norm(face[0:2] - anchor))
+					(x0,y0,x1,y1) = faces[0]
+					fx = (x0+x1) * 0.5
+					fy = (y0+y1) * 0.5 + (y1-y0) * 0.5
+
+					nx += attract_rate * (fx-nx)
+					ny += attract_rate * (fy-ny)
+
+					dx = nx - x
+					dy = ny - y
+
+					redraw = True
+
+			if tracker and tracker.good:
+				# use (dx,dy) from above, possibly updated by face pos
+
+				tracker.adapt(curframe_gray, rate=adapt_rate, delta=(dx,dy))
+
 				tpos = tracker_upscale(tracker.pos)
 				set_cursor(*tpos)
 
@@ -610,10 +661,6 @@ def load_delta_frame(delta):
 				if draw_graph:
 					graphbg[graphbg_head - src.index] = \
 						src.cache[src.index][ clamp(0, screenh-1, get_keyframe(src.index)[1]) ]
-
-			else:
-				result = True # stop
-				print "tracking bad, aborting"
 
 	else: # big jump
 		load_this_frame(src.index + delta, bool(tracker))
@@ -755,6 +802,41 @@ def dump_video(videodest):
 	outvid.release()
 	print "done"
 
+def detect_faces(subrect=None):
+	# http://docs.opencv.org/modules/objdetect/doc/cascade_classification.html#cascadeclassifier-detectmultiscale
+	# expects U8 input (gray)
+
+	image = curframe_gray
+
+	if subrect is not None:
+		(x0,y0,x1,y1) = subrect // trackerscale
+		x0 = clamp(0, srcw, x0)
+		x1 = clamp(0, srcw, x1)
+		y0 = clamp(0, srch, y0)
+		y1 = clamp(0, srch, y1)
+		image = image[y0:y1, x0:x1]
+
+	faces = face_cascade.detectMultiScale(
+		image,
+		scaleFactor=1.3, minNeighbors=2, minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
+
+	if len(faces) == 0:
+		return []
+
+	if subrect is not None:
+		faces[:,0:2] += (x0,y0)
+
+	faces[:,2:4] += faces[:,0:2]
+
+	faces *= trackerscale
+
+	return list(faces)
+
+face_cascade = cv2.CascadeClassifier(
+	os.path.join(
+		os.getenv('OPENCV_DIR'),
+		"../sources/data/haarcascades/haarcascade_frontalface_alt.xml"))
+
 draw_input = True
 draw_output = True
 draw_graph = True
@@ -769,8 +851,6 @@ graphdraw = False
 graphsmooth_start = None
 graphsmooth_stop = None
 
-trailing_smooth = False
-
 graphslices = 125
 graphscale = 6 # pixels per frame
 # graphslices
@@ -780,7 +860,11 @@ graphheight = iround(graphslices * graphscale)
 tracker = None
 use_tracker = False
 tracker_rectsel = RectSelector(on_tracker_rect)
-trackerscale = 2.0 # TODO: give to pyrdown
+trackerscale = int(2) # TODO: give to pyrdown
+
+use_faces = False
+faces = []
+faces_roi = None
 
 undoqueue = []
 
@@ -858,9 +942,9 @@ if __name__ == '__main__':
 		cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
 
-		cv2.resizeWindow("source", int(srcw/2), int(srch/2))
-		cv2.resizeWindow("output", int(screenw/2), int(screenh/2))
-		cv2.resizeWindow("graph", int(srcw/2), graphheight)
+		cv2.resizeWindow("source", int(srcw/trackerscale), int(srch/trackerscale))
+		cv2.resizeWindow("output", int(screenw/trackerscale), int(screenh/trackerscale))
+		cv2.resizeWindow("graph", int(srcw/trackerscale), graphheight)
 
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
 		cv2.setMouseCallback("output", onmouse_output) # for seeking
@@ -945,6 +1029,7 @@ if __name__ == '__main__':
 					redraw = True
 			
 			if key == ord('c'): # cache all frames in the graph
+				draw_graph = True
 				imax = graphbg_head
 				imin = imax - graphslices
 				src.cache_range(imin, imax)
@@ -965,7 +1050,7 @@ if __name__ == '__main__':
 				draw_graph = not draw_graph
 				if draw_graph:
 					redraw = True
-				
+
 			if key == ord('4'):
 				draw_tracker = not draw_tracker
 				if draw_tracker:
@@ -979,10 +1064,6 @@ if __name__ == '__main__':
 				graphdraw = not graphdraw
 				print "graphdraw", graphdraw
 
-			if key == ord('m'):
-				trailing_smooth = not trailing_smooth
-				print "trailing smooth", trailing_smooth
-			
 			if key == 26: # ctrl-z
 				if undoqueue:
 					print "undoing..."
@@ -1017,6 +1098,13 @@ if __name__ == '__main__':
 					playspeed = 10
 					sched = time.clock()
 			
+			if key == ord('f'):
+				use_faces = not use_faces
+				print "use faces:", use_faces
+				if not use_faces:
+					faces = []
+					faces_roi = None
+
 			if key == ord('t'):
 				use_tracker = not use_tracker
 				print "use tracker:", use_tracker

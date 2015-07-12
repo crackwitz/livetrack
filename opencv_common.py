@@ -10,6 +10,7 @@ class RectSelector:
 		self.callback = callback
 		self.drag_center = None
 		self.drag_rect = None
+		self.drag_radius = None
 		self.enabled = False
 	def onmouse(self, event, x, y, flags, param):
 		if not self.enabled: return
@@ -25,10 +26,12 @@ class RectSelector:
 				self.drag_rect = None
 				if x1-x0 > 0 and y1-y0 > 0:
 					self.drag_rect = (x0, y0, x1, y1)
+					self.drag_radius = (xr, yr)
 			else:
 				rect = self.drag_rect
 				self.drag_center = None
 				self.drag_rect = None
+				self.drag_radius = None
 				if rect:
 					self.callback(rect)
 	def draw(self, vis):
