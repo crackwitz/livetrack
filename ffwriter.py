@@ -18,14 +18,10 @@ class FFWriter(object):
 			"ffmpeg",
 			'-loglevel', 'warning',
 			'-f', 'rawvideo',
-			'-pix_fmt', 'bgr24',
+			'-pix_fmt', pixfmt or 'bgr24',
 			'-s', '{0}x{1}'.format(width, height),
 			'-r', '{0}'.format(fps),
 			'-i', 'pipe:0',
-		] + ([
-			'-pix_fmt', pixfmt
-			#'-filter:v', 'format=pix_fmts={0}'.format(pixfmt or '')
-		] * (pixfmt is not None)) + [
 			'-c:v', codec,
 		] + (moreflags.split() if isinstance(moreflags, str) else moreflags) + [
 			'-y',
@@ -37,7 +33,7 @@ class FFWriter(object):
 	
 	def write(self, frame):
 		assert frame.dtype == np.uint8
-		assert frame.shape[2] == 3
+		assert frame.shape[2] in (3, 4)
 		assert frame.shape[0] == self.height
 		assert frame.shape[1] == self.width
 		frame.tofile(self.proc.stdin)
