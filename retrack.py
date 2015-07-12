@@ -605,6 +605,12 @@ def load_delta_frame(delta):
 			if tracker.good:
 				tpos = tracker_upscale(tracker.pos)
 				set_cursor(*tpos)
+
+				# update xt
+				if draw_graph:
+					graphbg[graphbg_head - src.index] = \
+						src.cache[src.index][ clamp(0, screenh-1, get_keyframe(src.index)[1]) ]
+
 			else:
 				result = True # stop
 				print "tracking bad, aborting"
