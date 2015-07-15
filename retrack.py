@@ -15,16 +15,6 @@ import ffwriter
 
 ########################################################################
 
-def getslice(frame, anchor):
-	return None
-	
-	if anchor is not None:
-		(x,y) = anchor
-	else:
-		y = iround(frame.shape[0] * 0.333)
-	#return (frame.sum(axis=0) / frame.shape[1]).astype(np.uint8)
-	return frame[y]
-
 class RateChangedVideo(object):
 	"reads the last of every n frames"
 	
@@ -182,7 +172,6 @@ def redraw_display():
 	(ax, ay) = anchor
 	(axi, ayi) = map(iround, anchor)
 
-	ay = meta['anchor'][1]
 	Anchor = np.matrix([
 		[1, 0, -ax],
 		[0, 1, -ay],
@@ -721,10 +710,12 @@ def dump_video(videodest):
 		output[i] = get_keyframe(i)
 
 	(xmin, xmax) = meta['anchor_x_range']
+	(ymin, ymax) = meta['anchor_y_range']
 	
 	output[output[:,0] < xmin] = xmin
 	output[output[:,0] > xmax] = xmax
-	output[:,1] = meta['anchor'][1]
+	output[output[:,1] < ymin] = ymin
+	output[output[:,1] > ymax] = ymax
 	
 	sigma = meta.get('sigma', 0)
 	

@@ -7,6 +7,10 @@
     427, 
     1493
   ], 
+  "anchor_y_range": [
+    540,
+    540
+  ],
   "keyframes": "retrack-keyframes.json", 
   "position": [
     320, 
