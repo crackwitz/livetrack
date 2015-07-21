@@ -46,12 +46,17 @@ def divSpec(A, B):
 
 eps = 1e-5
 
+def vertex(x2, y1, y2, y3):
+    return x2 + 0.5 * (y3 - y1) / (2*y2 - y1 - y3)
+
+def fix8(*s):
+    return tuple(int(round(x * 256)) for x in s)
+
 class MOSSE:
     def __init__(self, frame, rect):
         x1, y1, x2, y2 = rect
-        w, h = map(cv2.getOptimalDFTSize, [x2-x1, y2-y1])
-        x1, y1 = (x1+x2-w)//2, (y1+y2-h)//2
-        self.pos = x, y = x1+0.5*(w-1), y1+0.5*(h-1)
+        w, h = map(cv2.getOptimalDFTSize, [int(x2-x1), int(y2-y1)])
+        self.pos = x, y = np.float32([x1+x2, y1+y2]) / 2.0
         self.size = w, h
         img = cv2.getRectSubPix(frame, (w, h), (x, y))
 
@@ -121,14 +126,27 @@ class MOSSE:
         y *= scale
         w *= scale
         h *= scale
-        x1, y1, x2, y2 = int(x-0.5*w), int(y-0.5*h), int(x+0.5*w), int(y+0.5*h)
-        cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 0, 255), thickness=2)
+        x1, y1, x2, y2 = (x-0.5*w), (y-0.5*h), (x+0.5*w), (y+0.5*h)
+        cv2.rectangle(vis,
+            fix8(x1, y1),
+            fix8(x2, y2),
+            (0, 0, 255), thickness=2, shift=8)
         if self.good:
-            cv2.circle(vis, (int(x), int(y)), 4, (0, 0, 255), -1)
+            cv2.circle(vis,
+                fix8(int(x), int(y)),
+                fix8(4)[0],
+                (0, 0, 255), -1, shift=8)
         else:
-            cv2.line(vis, (x1, y1), (x2, y2), (0, 0, 255), thickness=2)
-            cv2.line(vis, (x2, y1), (x1, y2), (0, 0, 255), thickness=2)
-        draw_str(vis, (x1, y2+32), 'PSR: %.2f' % self.psr)
+            cv2.line(vis,
+                fix8(x1, y1),
+                fix8(x2, y2),
+                (0, 0, 255), thickness=2, shift=8)
+            cv2.line(vis,
+                fix8(x2, y1),
+                fix8(x1, y2),
+                (0, 0, 255), thickness=2, shift=8)
+
+        draw_str(vis, (int(x1), int(y2+32)), 'PSR: %.2f' % self.psr)
 
     def preprocess(self, img):
         img = np.log(np.float32(img)+1.0)
@@ -140,11 +158,14 @@ class MOSSE:
         resp = cv2.idft(C, flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
         h, w = resp.shape
         _, mval, _, (mx, my) = cv2.minMaxLoc(resp)
+        fmx = vertex(mx, *resp[my,mx-1:mx+2])
+        fmy = vertex(my, *resp[my-1:my+2,mx])
+        #print (mx - w//2, my - h//2), (fmx - w//2, fmy - h//2)
         side_resp = resp.copy()
         cv2.rectangle(side_resp, (mx-5, my-5), (mx+5, my+5), 0, -1)
         smean, sstd = side_resp.mean(), side_resp.std()
         psr = (mval-smean) / (sstd+eps)
-        return resp, (mx-w//2, my-h//2), psr
+        return resp, (fmx-w//2, fmy-h//2), psr
 
     def update_kernel(self):
         self.H = divSpec(self.H1, self.H2)
