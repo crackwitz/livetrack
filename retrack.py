@@ -757,7 +757,7 @@ def dump_video(videodest):
 				videodest,
 				framerate, (screenw, screenh),
 				codec='libx264', pixfmt='yuv420p',
-				moreflags='-loglevel 32 -crf 15 -preset ultrafast')
+				moreflags='-loglevel 32 -crf 15 -preset veryfast')
 			#outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			#assert outvid.isOpened()
 
