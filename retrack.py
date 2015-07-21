@@ -740,7 +740,7 @@ def dump_video(videodest):
 	do_pieces = ('%' in videodest)
 	outseq = 1
 	outvid = None
-	
+
 	for i,k in enumerate(output):
 		if do_pieces and (i % int(600 * framerate) == 0) and (outvid is not None):
 			outvid.release()
@@ -756,8 +756,8 @@ def dump_video(videodest):
 			outvid = ffwriter.FFWriter(
 				videodest,
 				framerate, (screenw, screenh),
-				codec='libx264', pixfmt='yuv420p',
-				moreflags='-loglevel 32 -crf 15 -preset veryfast')
+				codec='libx264', pixfmt='bgr24',
+				moreflags='-loglevel 32 -pix_fmt yuv420p -crf 15 -preset ultrafast')
 			#outvid = cv2.VideoWriter(videodest % outseq, fourcc, framerate, (screenw, screenh))
 			#assert outvid.isOpened()
 
