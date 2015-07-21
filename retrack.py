@@ -726,10 +726,10 @@ def dump_video(videodest):
 	(xmin, xmax) = meta['anchor_x_range']
 	(ymin, ymax) = meta['anchor_y_range']
 	
-	output[output[:,0] < xmin] = xmin
-	output[output[:,0] > xmax] = xmax
-	output[output[:,1] < ymin] = ymin
-	output[output[:,1] > ymax] = ymax
+	output[output[:,0] < xmin, 0] = xmin
+	output[output[:,0] > xmax, 0] = xmax
+	output[output[:,1] < ymin, 1] = ymin
+	output[output[:,1] > ymax, 1] = ymax
 	
 	sigma = meta.get('sigma', 0)
 	
