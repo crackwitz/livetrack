@@ -38,11 +38,21 @@ class RectSelector:
 		if not self.drag_rect:
 			return False
 		x0, y0, x1, y1 = self.drag_rect
-		cv2.rectangle(vis, (x0, y0), (x1, y1), (0, 255, 0), 2)
-		cx = (x0+x1) / 2
-		cy = (y0+y1) / 2
-		cv2.line(vis, (cx-5, cy-5), (cx+5, cy+5), (0, 255, 0), 2)
-		cv2.line(vis, (cx+5, cy-5), (cx-5, cy+5), (0, 255, 0), 2)
+		cx = (x0+x1) * 0.5
+		cy = (y0+y1) * 0.5
+		fix8 = lambda *s: tuple(int(round(x * 256)) for x in s)
+		cv2.rectangle(vis,
+			fix8(x0, y0),
+			fix8(x1, y1),
+			(0, 255, 0), 2, shift=8)
+		cv2.line(vis,
+			fix8(cx-5, cy-5),
+			fix8(cx+5, cy+5),
+			(0, 255, 0), 2, shift=8)
+		cv2.line(vis,
+			fix8(cx+5, cy-5),
+			fix8(cx-5, cy+5),
+			(0, 255, 0), 2, shift=8)
 		return True
 	@property
 	def dragging(self):
