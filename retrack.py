@@ -155,10 +155,11 @@ def iround(x):
 def sgn(x):
 	return (x > 0) - (x < 0)
 
-def clamp(low, high, value):
-	if value < low: return low
-	if value > high: return high
-	return value
+def fix8(a):
+	if isinstance(a, (int, float)):
+		return a * 256
+	else:
+		return tuple((np.array(a) * 256).round().astype(np.int32))
 
 def redraw_display():
 	#print "redraw"
@@ -167,10 +168,17 @@ def redraw_display():
 	else:
 		cursorcolor = (255, 255, 0)
 
-
 	# anchor is animated
-	(ax, ay) = anchor
-	(axi, ayi) = map(iround, anchor)
+
+	(xmin, xmax) = meta['anchor_x_range']
+	(ymin, ymax) = meta['anchor_y_range']
+
+	# anchor within bounds
+	(ax, ay) = canchor = np.clip(anchor, [xmin, ymin], [xmax, ymax])
+
+	# anchor cross will be updated
+	cpos = np.float32(position) + (anchor - canchor) * meta['scale']
+	# *scale to compensate the offset in screen space
 
 	Anchor = np.matrix([
 		[1, 0, -ax],
@@ -200,21 +208,25 @@ def redraw_display():
 	if draw_output:
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
 		
-		cv2.rectangle(surface, tuple(viewbox[0:2]), tuple(viewbox[2:4]), (0,255,255), thickness=2)
+		cv2.rectangle(surface,
+			fix8(viewbox[0:2]),
+			fix8(viewbox[2:4]),
+			(0,255,255), thickness=2, shift=8, lineType=cv2.LINE_AA)
 
 		cv2.line(surface,
-			(position[0]-10, position[1]-10),
-			(position[0]+10, position[1]+10), 
-			cursorcolor,  thickness=2)
+			fix8(cpos + (+10, +10)),
+			fix8(cpos - (+10, +10)),
+			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
 		cv2.line(surface,
-			(position[0]+10, position[1]-10),
-			(position[0]-10, position[1]+10), 
-			cursorcolor,  thickness=2)
+			fix8(cpos + (+10, -10)),
+			fix8(cpos - (+10, -10)),
+			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
 		
-		timepos = iround(screenw * src.index / totalframes)
+		timepos = (screenw * src.index / totalframes)
 		cv2.line(surface,
-			(timepos, 0), (timepos, 20),
-			(255, 255, 0), thickness=4)
+			fix8([timepos, 0]),
+			fix8([timepos, 20]),
+			(255, 255, 0), thickness=4, shift=8, lineType=cv2.LINE_AA)
 
 		cv2.imshow("output", surface)
 
@@ -222,56 +234,55 @@ def redraw_display():
 		source = curframe.copy()
 
 		cv2.line(source,
-			(axi-10, ayi-10),
-			(axi+10, ayi+10), 
-			cursorcolor,  thickness=2)
+			fix8(anchor - 10),
+			fix8(anchor + 10), 
+			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
 		cv2.line(source,
-			(axi+10, ayi-10),
-			(axi-10, ayi+10), 
-			cursorcolor,  thickness=2)
+			fix8(anchor + (+10, -10)),
+			fix8(anchor - (+10, -10)),
+			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
 
 		TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
 		BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
 
-		TL = tuple(map(iround, np.array(TL[0:2,0].T).tolist()[0]))
-		BR = tuple(map(iround, np.array(BR[0:2,0].T).tolist()[0]))
-
 		cv2.rectangle(source,
-			TL, BR,
-			(255, 0, 0), thickness=2)
+			fix8(np.array(TL)[0:2,0]),
+			fix8(np.array(BR)[0:2,0]),
+			(255, 0, 0), thickness=2, shift=8, lineType=cv2.LINE_AA)
 
 		secs = src.index / framerate
 		hours, secs = divmod(secs, 3600)
 		mins, secs = divmod(secs, 60)
 		cv2.rectangle(source,
-			(0, screenh), (screenw, screenh-70),
-			(0,0,0),
-			cv2.FILLED
-			)
+			(0, screenh),
+			(screenw, screenh-70),
+			(0,0,0), cv2.FILLED)
+
 		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
 		cv2.putText(source,
 			text,
 			(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
 
 		if use_faces:
+			# faces are in source coordinates and scale
 			if faces_roi is not None:
-				iroi = ((faces_roi / trackerscale).round() * trackerscale - 1).astype('int')
-
+				iroi = fix8(faces_roi)
 				cv2.rectangle(source,
-					tuple(iroi[0:2]), tuple(iroi[2:4]),
-					(0, 0, 255), thickness=2)
+					iroi[0:2], iroi[2:4],
+					(0, 0, 255), thickness=2, shift=8, lineType=cv2.LINE_AA)
 
 			for face in faces:
-				(x0,y0,x1,y1) = face
+				face = fix8(face)
 				cv2.rectangle(source,
-					(x0,y0), (x1, y1),
-					(0, 255, 0), thickness=2)
+					face[0:2], face[2:4],
+					(0, 255, 0), thickness=2, shift=8, lineType=cv2.LINE_AA)
 
 		if use_tracker:
 			tracker_rectsel.draw(source)
 
 		if tracker:
-			tracker.draw_state(source, trackerscale)
+			# scale to source resolution
+			tracker.draw_state(source, 1 / trackerscale)
 
 		cv2.imshow("source", source)
 	
@@ -291,7 +302,7 @@ def redraw_display():
 		if graphbg is None: # full redraw
 			t0 = time.clock()
 			graphbg = [
-				src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])] if (i in src.cache) else emptyrow
+				src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)] if (i in src.cache) else emptyrow
 				for i in indices
 			]
 			t1 = time.clock()
@@ -321,7 +332,7 @@ def redraw_display():
 				graphbg_indices = set(i for i in graphbg_indices if i <= imax)
 			
 			replacements = [
-				src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])] if (i in src.cache) else emptyrow
+				src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)] if (i in src.cache) else emptyrow
 				for i in newindices
 			]
 			graphbg_indices.update( set(newindices) & set(src.cache) )
@@ -334,30 +345,33 @@ def redraw_display():
 		updates = (set(indices) & set(src.cache)) - graphbg_indices
 		if updates:
 			for i in updates:
-				graphbg[graphbg_head - i] = src.cache[i][clamp(0, screenh-1, get_keyframe(i)[1])]
+				graphbg[graphbg_head - i] = src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)]
 			graphbg_indices.update(updates)
 		
 		graph = cv2.resize(graphbg, (srcw, graphheight), interpolation=cv2.INTER_NEAREST)
 
 		lineindices = [i for i in range(imin, imax+1) if (0 <= i < totalframes) and keyframes[i] is not None]
-		lines = np.array([
-			( iround(keyframes[index][0]), (imax - index) * graphscale )
+		lines = np.int32([
+			fix8([ keyframes[index][0], (imax - index) * graphscale ])
 			for index in lineindices
-		], dtype=np.int32)
+		])
 
-		now = iround((imax - src.index) * graphscale)
+		now = (imax - src.index) * graphscale
 		cv2.line(graph,
-			(0, now), (srcw, now), (255, 255, 255), thickness=2)
+			fix8([0, now]),
+			fix8([srcw, now]),
+			(255, 255, 255), thickness=2, shift=8, lineType=cv2.LINE_AA)
 
-		if lines.shape[0] > 0:
+		if len(lines) > 0:
 			cv2.polylines(
 				graph,
 				[lines],
 				False,
 				(255, 255, 0),
-				thickness=2
+				thickness=2,
+				shift=8, lineType=cv2.LINE_AA
 			)
-			for i,pos in zip(lineindices,lines):
+			for i,pos in zip(lineindices, lines):
 				x,y = pos
 				
 				points = np.array(map(get_keyframe, [i-1, i, i+1]))
@@ -379,9 +393,9 @@ def redraw_display():
 					
 				cv2.line(
 					graph,
-					(x-int(spread[0]), y), (x+int(spread[1]), y),
+					(x-int(spread[0] * 256), y), (x+int(spread[1] * 256), y),
 					color,
-					thickness=thickness)
+					thickness=thickness, shift=8, lineType=cv2.LINE_AA)
 
 		secs = src.index / framerate
 		hours, secs = divmod(secs, 3600)
@@ -412,16 +426,16 @@ def onmouse(event, x, y, flags, userdata):
 		
 		if flags == cv2.EVENT_FLAG_LBUTTON:
 			#print "onmouse move lbutton", (x,y), flags, userdata
-			set_cursor(x,y)
+			set_cursor([x,y])
 
 	elif event == cv2.EVENT_LBUTTONDOWN:
 		#print "onmouse buttondown", (x,y), flags, userdata
 		mousedown = True
-		set_cursor(x, y)
+		set_cursor([x,y])
 
 	elif event == cv2.EVENT_LBUTTONUP:
 		#print "onmouse buttonup", (x,y), flags, userdata
-		set_cursor(x, y)
+		set_cursor([x,y])
 		mousedown = False
 
 def onmouse_output(event, x, y, flags, userdata):
@@ -472,7 +486,7 @@ def onmouse_graph(event, x, y, flags, userdata):
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
 			(ax,ay) = get_keyframe(curindex)
 			ax = x
-			keyframes[curindex] = (ax, ay)
+			keyframes[curindex] = np.float32([ax, ay])
 			redraw = True
 
 	else:
@@ -484,12 +498,13 @@ smoothing_kernel = range(-smoothing_radius, +smoothing_radius+1)
 
 def smoothed_keyframe(i):
 	#import pdb; pdb.set_trace()
-	return (np.sum([get_keyframe(i+j) for j in smoothing_kernel], axis=0, dtype=np.float32) / len(smoothing_kernel)).tolist()
+	return np.sum([get_keyframe(i+j) for j in smoothing_kernel], axis=0, dtype=np.float32) / len(smoothing_kernel)
 	
-def set_cursor(x, y):
+def set_cursor(newanchor):
 	global anchor, redraw
-	anchor = (x,y)
-	keyframes[src.index] = anchor
+	if not isinstance(newanchor, np.float32):
+		newanchor = np.float32(newanchor)
+	keyframes[src.index] = anchor = newanchor
 	redraw = True
 	#print "set cursor", anchor
 
@@ -517,7 +532,10 @@ def save(do_query=False):
 		print "wrote metafile"
 	
 	# keyframes
-	output = json.dumps(keyframes, indent=2, sort_keys=True)
+	output = json.dumps(
+		[None if (x is None) else x.tolist() for x in keyframes],
+		indent=2,
+		sort_keys=True)
 	
 	do_write = True
 	exists = os.path.exists(meta['keyframes'])
@@ -588,8 +606,8 @@ def get_keyframe(index):
 def on_tracker_rect(rect):
 	global tracker, use_tracker
 	print "rect selected:", rect
-	tracker = MOSSE(curframe_gray, map(iround, tracker_downscale(rect)))
-	set_cursor(*tracker_upscale(tracker.pos))
+	tracker = MOSSE(curframe_gray, tracker_downscale(rect))
+	set_cursor(tracker_upscale(tracker.pos))
 
 def load_delta_frame(delta):
 	global redraw
@@ -599,25 +617,26 @@ def load_delta_frame(delta):
 		load_this_frame(src.index + delta, False)
 		
 		if curframe is not None:
-			(x,y) = (nx,ny) = anchor
+			(x,y) = (nx,ny) = anchor # in source scale
 
 			adapt_rate = 0.2
 			attract_rate = 0.02
 	
 			if tracker:
-				(dx,dy) = tracker.track(curframe_gray)
+				(dx,dy) = tracker.track(curframe_gray) # dx/dy in tracker scale
+
 				if not tracker.good:
 					result = True # stop
 					print "tracking bad, aborting"
 				else:
-					nx += dx
-					ny += dy
+					nx += dx / trackerscale
+					ny += dy / trackerscale
 
 			if use_faces: # and tracker and tracker.good:
-				global faces_roi
+				global faces_roi # will be set
 				if tracker:
-					(tx,ty) = tracker.size
-					faces_roi = np.hstack([nx-tx, ny-2*ty, nx+tx, ny+ty])
+					(tx,ty) = np.float32(tracker.size) / trackerscale
+					faces_roi = np.float32([nx - 0.5*tx, ny - 1*ty, nx + 0.5*tx, ny + 0.5*ty])
 				else:
 					faces_roi = None
 
@@ -644,12 +663,12 @@ def load_delta_frame(delta):
 				tracker.adapt(curframe_gray, rate=adapt_rate, delta=(dx,dy))
 
 				tpos = tracker_upscale(tracker.pos)
-				set_cursor(*tpos)
+				set_cursor(tpos)
 
 				# update xt
 				if draw_graph:
 					graphbg[graphbg_head - src.index] = \
-						src.cache[src.index][ clamp(0, screenh-1, get_keyframe(src.index)[1]) ]
+						src.cache[src.index][ np.clip(get_keyframe(src.index)[1], 0, screenh-1) ]
 
 	else: # big jump
 		load_this_frame(src.index + delta, bool(tracker))
@@ -683,8 +702,12 @@ def load_this_frame(index=None, update_tracker=True, only_decode=False):
 		return
 
 	if not only_decode:
-		curframe_gray = cv2.pyrDown(cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY))
-	
+		curframe_gray = cv2.resize(
+			cv2.cvtColor(curframe, cv2.COLOR_BGR2GRAY),
+			dsize=None,
+			fx=trackerscale, fy=trackerscale,
+			interpolation=cv2.INTER_AREA)
+		
 	anchor = get_keyframe(src.index)
 	
 	#print "frame", src.index, "anchor {0:8.3f} x {1:8.3f}".format(*anchor)
@@ -696,10 +719,10 @@ def load_this_frame(index=None, update_tracker=True, only_decode=False):
 	redraw = True
 
 def tracker_upscale(point):
-	return tuple(v * trackerscale for v in point)
+	return tuple(v / trackerscale for v in point)
 
 def tracker_downscale(point):
-	return tuple(v / trackerscale for v in point)
+	return tuple(v * trackerscale for v in point)
 
 def dump_video(videodest):
 	output = np.zeros((totalframes, 2), dtype=np.float32)
@@ -797,19 +820,23 @@ def detect_faces(subrect=None):
 	# http://docs.opencv.org/modules/objdetect/doc/cascade_classification.html#cascadeclassifier-detectmultiscale
 	# expects U8 input (gray)
 
+	facesize = minfacesize # full region
+
 	image = curframe_gray
 
 	if subrect is not None:
-		(x0,y0,x1,y1) = subrect // trackerscale
-		x0 = clamp(0, srcw, x0)
-		x1 = clamp(0, srcw, x1)
-		y0 = clamp(0, srch, y0)
-		y1 = clamp(0, srch, y1)
+		cliprect = np.clip(subrect, [0,0,0,0], [srcw, srch, srcw, srch])
+		trackrect = cliprect * trackerscale
+		(x0,y0,x1,y1) = trackrect.round().astype(np.int32)
+
+		facesize = min(facesize, int(min(x1-x0, y1-y0) * 0.3))
+
 		image = image[y0:y1, x0:x1]
+
 
 	faces = face_cascade.detectMultiScale(
 		image,
-		scaleFactor=1.3, minNeighbors=2, minSize=(30, 30), flags=cv2.CASCADE_SCALE_IMAGE)
+		scaleFactor=1.3, minNeighbors=2, minSize=(facesize,)*2, flags=cv2.CASCADE_SCALE_IMAGE)
 
 	if len(faces) == 0:
 		return []
@@ -819,7 +846,7 @@ def detect_faces(subrect=None):
 
 	faces[:,2:4] += faces[:,0:2]
 
-	faces *= trackerscale
+	faces *= (1 / trackerscale)
 
 	return list(faces)
 
@@ -832,6 +859,7 @@ draw_input = True
 draw_output = True
 draw_graph = True
 draw_tracker = True
+dispscale = 0.4
 
 graphbg = None
 graphbg_head = None
@@ -850,10 +878,11 @@ graphheight = iround(graphslices * graphscale)
 
 tracker = None
 use_tracker = False
+trackerscale = 0.5
 tracker_rectsel = RectSelector(on_tracker_rect)
-trackerscale = int(2) # TODO: give to pyrdown
 
 use_faces = False
+minfacesize = 30 # for a full region (less if the tracker region is smaller)
 faces = []
 faces_roi = None
 
@@ -875,8 +904,15 @@ if __name__ == '__main__':
 	meta = json.load(open(metafile))
 
 	screenw, screenh = meta['screen']
-	position = meta['position']
-	anchor = meta['anchor']
+	position = np.float32(meta['position'])
+	anchor = np.float32(meta['anchor'])
+
+	if 'trackerscale' in meta:
+		trackerscale = float(meta['trackerscale'])
+
+	if 'dispscale' in meta:
+		dispscale = float(meta['dispscale'])
+		tracker_rectsel.scale = dispscale
 
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
@@ -907,10 +943,16 @@ if __name__ == '__main__':
 	
 	print json.dumps(meta, indent=2, sort_keys=True)
 	
+	keyframes = []
+	
 	if os.path.exists(meta['keyframes']):
-		keyframes = json.load(open(meta['keyframes']))	
-	else:
-		keyframes = [None] * totalframes
+		keyframes = [
+			None if keyframe is None else np.float32(keyframe)
+			for keyframe in json.load(open(meta['keyframes']))
+		]
+	
+	if len(keyframes) < totalframes:
+		keyframes += [None] * (totalframes - len(keyframes))
 	
 	if do_dump:
 		src = VideoSource(srcvid, numcache=10)
@@ -933,9 +975,9 @@ if __name__ == '__main__':
 		cv2.namedWindow("output", cv2.WINDOW_NORMAL)
 		cv2.namedWindow("graph", cv2.WINDOW_NORMAL)
 
-		cv2.resizeWindow("source", int(srcw/trackerscale), int(srch/trackerscale))
-		cv2.resizeWindow("output", int(screenw/trackerscale), int(screenh/trackerscale))
-		cv2.resizeWindow("graph", int(srcw/trackerscale), graphheight)
+		cv2.resizeWindow("source", int(srcw*dispscale), int(srch*dispscale))
+		cv2.resizeWindow("output", int(screenw*dispscale), int(screenh*dispscale))
+		cv2.resizeWindow("graph", int(srcw*dispscale), graphheight)
 
 		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
 		cv2.setMouseCallback("output", onmouse_output) # for seeking
