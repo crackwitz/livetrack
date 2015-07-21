@@ -208,25 +208,20 @@ def redraw_display():
 	if draw_output:
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
 		
-		cv2.rectangle(surface,
-			fix8(viewbox[0:2]),
-			fix8(viewbox[2:4]),
-			(0,255,255), thickness=2, shift=8, lineType=cv2.LINE_AA)
-
 		cv2.line(surface,
 			fix8(cpos + (+10, +10)),
 			fix8(cpos - (+10, +10)),
-			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
+			cursorcolor,  thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 		cv2.line(surface,
 			fix8(cpos + (+10, -10)),
 			fix8(cpos - (+10, -10)),
-			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
+			cursorcolor,  thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 		
 		timepos = (screenw * src.index / totalframes)
 		cv2.line(surface,
 			fix8([timepos, 0]),
 			fix8([timepos, 20]),
-			(255, 255, 0), thickness=4, shift=8, lineType=cv2.LINE_AA)
+			(255, 255, 0), thickness=iround(2/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 		cv2.imshow("output", surface)
 
@@ -236,11 +231,11 @@ def redraw_display():
 		cv2.line(source,
 			fix8(anchor - 10),
 			fix8(anchor + 10), 
-			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
+			cursorcolor,  thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 		cv2.line(source,
 			fix8(anchor + (+10, -10)),
 			fix8(anchor - (+10, -10)),
-			cursorcolor,  thickness=2, shift=8, lineType=cv2.LINE_AA)
+			cursorcolor,  thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 		TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
 		BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
@@ -248,7 +243,7 @@ def redraw_display():
 		cv2.rectangle(source,
 			fix8(np.array(TL)[0:2,0]),
 			fix8(np.array(BR)[0:2,0]),
-			(255, 0, 0), thickness=2, shift=8, lineType=cv2.LINE_AA)
+			(255, 0, 0), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 		secs = src.index / framerate
 		hours, secs = divmod(secs, 3600)
@@ -269,13 +264,13 @@ def redraw_display():
 				iroi = fix8(faces_roi)
 				cv2.rectangle(source,
 					iroi[0:2], iroi[2:4],
-					(0, 0, 255), thickness=2, shift=8, lineType=cv2.LINE_AA)
+					(0, 0, 255), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 			for face in faces:
 				face = fix8(face)
 				cv2.rectangle(source,
 					face[0:2], face[2:4],
-					(0, 255, 0), thickness=2, shift=8, lineType=cv2.LINE_AA)
+					(0, 255, 0), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 		if use_tracker:
 			tracker_rectsel.draw(source)
@@ -360,7 +355,7 @@ def redraw_display():
 		cv2.line(graph,
 			fix8([0, now]),
 			fix8([srcw, now]),
-			(255, 255, 255), thickness=2, shift=8, lineType=cv2.LINE_AA)
+			(255, 255, 255), thickness=1, shift=8, lineType=cv2.LINE_AA)
 
 		if len(lines) > 0:
 			cv2.polylines(
@@ -643,11 +638,10 @@ def load_delta_frame(delta):
 				if tracker and tracker.good and len(faces) >= 1:
 					faces.sort(key=lambda face: np.linalg.norm(face[0:2] - anchor))
 					(x0,y0,x1,y1) = faces[0]
-					fx = (x0+x1) * 0.5
-					fy = (y0+y1) * 0.5 + (y1-y0) * 0.5
+					facedim = np.float32([x1-x0, y1-y0])
+					aface = np.float32([x0, y0]) + face_anchor * facedim
 
-					nx += face_attract_rate * (fx-nx)
-					ny += face_attract_rate * (fy-ny)
+					(nx,ny) = (nx,ny) + face_attract_rate * (aface - (nx,ny))
 
 					dx = nx - x
 					dy = ny - y
@@ -884,6 +878,7 @@ minfacesize = 30 # for a full region (less if the tracker region is smaller)
 faces = []
 faces_roi = None
 face_attract_rate = 0.02
+face_anchor = np.float32([0.5, 0.75])
 
 undoqueue = []
 
@@ -918,6 +913,9 @@ if __name__ == '__main__':
 
 	if 'face_attract_rate' in meta:
 		face_attract_rate = float(meta['face_attract_rate'])
+
+	if 'face_anchor' in meta:
+		face_anchor = np.float32(meta['face_anchor'])
 
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
