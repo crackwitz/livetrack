@@ -619,9 +619,6 @@ def load_delta_frame(delta):
 		if curframe is not None:
 			(x,y) = (nx,ny) = anchor # in source scale
 
-			adapt_rate = 0.2
-			attract_rate = 0.02
-	
 			if tracker:
 				(dx,dy) = tracker.track(curframe_gray) # dx/dy in tracker scale
 
@@ -649,8 +646,8 @@ def load_delta_frame(delta):
 					fx = (x0+x1) * 0.5
 					fy = (y0+y1) * 0.5 + (y1-y0) * 0.5
 
-					nx += attract_rate * (fx-nx)
-					ny += attract_rate * (fy-ny)
+					nx += face_attract_rate * (fx-nx)
+					ny += face_attract_rate * (fy-ny)
 
 					dx = nx - x
 					dy = ny - y
@@ -660,7 +657,7 @@ def load_delta_frame(delta):
 			if tracker and tracker.good:
 				# use (dx,dy) from above, possibly updated by face pos
 
-				tracker.adapt(curframe_gray, rate=adapt_rate, delta=(dx,dy))
+				tracker.adapt(curframe_gray, rate=tracker_adapt_rate, delta=(dx,dy))
 
 				tpos = tracker_upscale(tracker.pos)
 				set_cursor(tpos)
@@ -879,12 +876,14 @@ graphheight = iround(graphslices * graphscale)
 tracker = None
 use_tracker = False
 trackerscale = 0.5
+tracker_adapt_rate = 0.2
 tracker_rectsel = RectSelector(on_tracker_rect)
 
 use_faces = False
 minfacesize = 30 # for a full region (less if the tracker region is smaller)
 faces = []
 faces_roi = None
+face_attract_rate = 0.02
 
 undoqueue = []
 
@@ -913,6 +912,12 @@ if __name__ == '__main__':
 	if 'dispscale' in meta:
 		dispscale = float(meta['dispscale'])
 		tracker_rectsel.scale = dispscale
+
+	if 'tracker_adapt_rate' in meta:
+		tracker_adapt_rate = float(meta['tracker_adapt_rate'])
+
+	if 'face_attract_rate' in meta:
+		face_attract_rate = float(meta['face_attract_rate'])
 
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
@@ -1057,9 +1062,22 @@ if __name__ == '__main__':
 
 			if key == ord('x'):
 				if keyframes[src.index] is not None:
+					def undo(index):
+						point = keyframes[src.index]
+						def sub():
+							print "restoring keyframe {0} (was {1})".format(index, keyframes[index] if index in keyframes else None)
+							keyframes[index] = point
+							print "keyframe restored to {1}".format(point)
+						return sub
+					undoqueue.append(undo(src.index))
+
 					keyframes[src.index] = None
 					anchor = get_keyframe(src.index)
 					redraw = True
+
+					print "keyframe {0} deleted".format(src.index)
+				else:
+					print "no keyframe to delete"
 			
 			if key == ord('c'): # cache all frames in the graph
 				draw_graph = True
@@ -1068,26 +1086,31 @@ if __name__ == '__main__':
 				src.cache_range(imin, imax)
 				redraw = True
 				graphbg = None
+				print "graph cached."
 			
 			if key == ord('1'):
 				draw_input = not draw_input
 				if draw_input:
 					redraw = True
+				print "draw input:", draw_input
 
 			if key == ord('2'):
 				draw_output = not draw_output
 				if draw_output:
 					redraw = True
+				print "draw output:", draw_output
 				
 			if key == ord('3'):
 				draw_graph = not draw_graph
 				if draw_graph:
 					redraw = True
+				print "draw graph:", draw_graph
 
 			if key == ord('4'):
 				draw_tracker = not draw_tracker
 				if draw_tracker:
 					redraw = True
+				print "draw tracker:", draw_tracker
 				
 			if key == ord('s'):
 				save()
@@ -1095,7 +1118,7 @@ if __name__ == '__main__':
 			
 			if key == ord('d'):
 				graphdraw = not graphdraw
-				print "graphdraw", graphdraw
+				print "manual drawing in graph:", graphdraw
 
 			if key == 26: # ctrl-z
 				if undoqueue:
@@ -1127,10 +1150,12 @@ if __name__ == '__main__':
 			if key == VK_SPACE:
 				if abs(playspeed) > 1e-3:
 					playspeed = 0.0
+					print "stopped"
 				else:
 					playspeed = 10
 					sched = time.clock()
-			
+					print "playing..."
+
 			if key == ord('f'):
 				use_faces = not use_faces
 				print "use faces:", use_faces
