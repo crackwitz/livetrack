@@ -368,7 +368,7 @@ def redraw_display():
 				[lines],
 				False,
 				(255, 255, 0),
-				thickness=2,
+				thickness=1,
 				shift=8, lineType=cv2.LINE_AA
 			)
 			for i,pos in zip(lineindices, lines):
@@ -1076,8 +1076,6 @@ if __name__ == '__main__':
 					redraw = True
 
 					print "keyframe {0} deleted".format(src.index)
-				else:
-					print "no keyframe to delete"
 			
 			if key == ord('c'): # cache all frames in the graph
 				draw_graph = True
