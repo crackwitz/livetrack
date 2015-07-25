@@ -23,11 +23,5 @@
   ], 
   "sigma": 2.0, 
   "source": "input.m2ts", 
-  "trackerscale": 0.5, 
-  "viewbox": [
-    0, 
-    0, 
-    640, 
-    1080
-  ]
+  "trackerscale": 0.5
 }

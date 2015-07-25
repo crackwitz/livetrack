@@ -172,8 +172,6 @@ def redraw_display():
 	M = Translate * Scale * Anchor
 	InvM = np.linalg.inv(M)
 
-	viewbox = meta['viewbox']
-	
 	if draw_output:
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_AREA)
 		
@@ -206,8 +204,8 @@ def redraw_display():
 			fix8(anchor - (+10, -10)),
 			cursorcolor,  thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
-		TL = InvM * np.matrix([[viewbox[0], viewbox[1], 1]]).T
-		BR = InvM * np.matrix([[viewbox[2], viewbox[3], 1]]).T
+		TL = InvM * np.matrix([[0, 0, 1]]).T
+		BR = InvM * np.matrix([[screenw, screenh, 1]]).T
 
 		cv2.rectangle(source,
 			fix8(np.array(TL)[0:2,0]),
@@ -758,8 +756,6 @@ def dump_video(videodest):
 		M = Translate * Scale * Anchor
 		InvM = np.linalg.inv(M)
 
-		viewbox = meta['viewbox']
-
 		#surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_CUBIC)
 		surface = cv2.warpAffine(curframe, M[0:2,:], (screenw, screenh), flags=cv2.INTER_LINEAR)
 		
@@ -905,7 +901,7 @@ if __name__ == '__main__':
 	framerate /= decimate
 	
 	totalframes //= decimate
-	totalframes -= (decimate > 1)
+	totalframes -= (decimate > 1) # shouldn't be needed... debug?
 
 	print "{0} fps effective".format(framerate)
 
