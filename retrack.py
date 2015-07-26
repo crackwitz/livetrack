@@ -356,8 +356,8 @@ def redraw_display():
 
 				thickness = 1
 				color = (0, 255, 255)
-				if graphsmooth_start is not None:
-					if graphsmooth_start <= i <= graphsmooth_stop:
+				if graphsel_start is not None:
+					if graphsel_start <= i <= graphsel_stop:
 						thickness = 3
 						color = (255,255,255)
 						spread += 3
@@ -419,39 +419,44 @@ def onmouse_graph(event, x, y, flags, userdata):
 	
 	curindex = graphbg_head - iround(y / graphscale)
 
-	if True:
-		global graphsmooth_start, graphsmooth_stop
+	global graphsel_start, graphsel_stop
+
+	# implement some selection dragging (for smoothing and deleting)
+	if event in (cv2.EVENT_MBUTTONDOWN, cv2.EVENT_RBUTTONDOWN):
+		graphsel_start = curindex
+		graphsel_stop = curindex
+		redraw = True
+
+	elif event == cv2.EVENT_MOUSEMOVE and flags in (cv2.EVENT_FLAG_MBUTTON, cv2.EVENT_FLAG_RBUTTON):
+		graphsel_stop = curindex
+		redraw = True
 		
-		# implement some selection dragging
-		if event in (cv2.EVENT_LBUTTONDOWN, cv2.EVENT_RBUTTONDOWN)[1:]:
-			graphsmooth_start = curindex
-			graphsmooth_stop = curindex
-			redraw = True
-		
-		elif (event == cv2.EVENT_MOUSEMOVE and flags in (cv2.EVENT_FLAG_LBUTTON, cv2.EVENT_FLAG_RBUTTON)[1:]):
-			graphsmooth_stop = curindex
-			redraw = True
-			
-		elif graphsmooth_start is not None and event in (cv2.EVENT_LBUTTONUP, cv2.EVENT_RBUTTONUP)[1:]:
-			graphsmooth_stop = curindex
-			redraw = True
-			
-			indices = range(graphsmooth_start, graphsmooth_stop+1)
-			
-			# prepare to undo this
-			oldkeyframes = {i: keyframes[i] for i in indices if keyframes[i] is not None}
-			def undo():
-				for i in indices: keyframes[i] = None
-				for i in oldkeyframes:
-					keyframes[i] = oldkeyframes[i]
-			undoqueue.append(undo)
-			while len(undoqueue) > 100:
-				undoqueue.pop(0)
-			
+	elif graphsel_start is not None and event in (cv2.EVENT_MBUTTONUP, cv2.EVENT_RBUTTONUP):
+		graphsel_stop = curindex
+		redraw = True
+
+		indices = range(graphsel_start, graphsel_stop+1)
+
+		# prepare to undo this
+		oldkeyframes = {i: keyframes[i] for i in indices if keyframes[i] is not None}
+		def undo():
+			for i in indices: keyframes[i] = None
+			for i in oldkeyframes:
+				keyframes[i] = oldkeyframes[i]
+		undoqueue.append(undo)
+		while len(undoqueue) > 100:
+			undoqueue.pop(0)
+
+		graphsel_start = None
+
+		### graph smoothing
+		if event is cv2.EVENT_RBUTTONUP:
 			updates = { i: smoothed_keyframe(i) for i in indices }
 			for i in indices: keyframes[i] = updates[i]
-			
-			graphsmooth_start = None
+
+		### graph smoothing
+		if event is cv2.EVENT_MBUTTONUP:
+			for i in indices: keyframes[i] = None
 
 	if graphdraw:
 		if (event == cv2.EVENT_LBUTTONDOWN) or (event == cv2.EVENT_MOUSEMOVE and flags == cv2.EVENT_FLAG_LBUTTON):
@@ -585,14 +590,14 @@ def load_delta_frame(tdelta):
 	result = None # True ~ stop
 	
 	if tdelta in (-1, +1):
-		load_this_frame(src.index + tdelta, False)
+		oldanchor = anchor
+		load_this_frame(src.index + tdelta, False) # changes anchor
 		
 		if curframe is not None:
-			oldanchor = anchor
-			newanchor = anchor.copy()
+			newanchor = oldanchor.copy()
 
 			if tracker:
-				xydelta = tracker.track(curframe_gray, pos=(anchor * trackerscale)) / trackerscale
+				xydelta = tracker.track(curframe_gray, pos=(oldanchor * trackerscale)) / trackerscale
 
 				if tracker.good:
 					newanchor += xydelta
@@ -836,8 +841,8 @@ graphbg_indices = set()
 
 graphdraw = False
 
-graphsmooth_start = None
-graphsmooth_stop = None
+graphsel_start = None
+graphsel_stop = None
 
 graphslices = 125
 graphscale = 6 # pixels per frame
