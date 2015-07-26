@@ -216,14 +216,14 @@ def redraw_display():
 		hours, secs = divmod(secs, 3600)
 		mins, secs = divmod(secs, 60)
 		cv2.rectangle(source,
-			(0, screenh),
-			(screenw, screenh-70),
+			(0, srch),
+			(srcw, srch-70),
 			(0,0,0), cv2.FILLED)
 
 		text = "{h:.0f}:{m:02.0f}:{s:06.3f} / frame {frame}".format(h=hours, m=mins, s=secs, frame=src.index)
 		cv2.putText(source,
 			text,
-			(10, screenh-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
+			(10, srch-10), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), 3)
 
 		if use_faces:
 			# faces are in source coordinates and scale
@@ -264,7 +264,7 @@ def redraw_display():
 		if graphbg is None: # full redraw
 			t0 = time.clock()
 			graphbg = [
-				src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)] if (i in src.cache) else emptyrow
+				src.cache[i][np.clip(get_keyframe(i)[1], 0, srch-1)] if (i in src.cache) else emptyrow
 				for i in indices
 			]
 			t1 = time.clock()
@@ -294,7 +294,7 @@ def redraw_display():
 				graphbg_indices = set(i for i in graphbg_indices if i <= imax)
 			
 			replacements = [
-				src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)] if (i in src.cache) else emptyrow
+				src.cache[i][np.clip(get_keyframe(i)[1], 0, srch-1)] if (i in src.cache) else emptyrow
 				for i in newindices
 			]
 			graphbg_indices.update( set(newindices) & set(src.cache) )
@@ -307,7 +307,7 @@ def redraw_display():
 		updates = (set(indices) & set(src.cache)) - graphbg_indices
 		if updates:
 			for i in updates:
-				graphbg[graphbg_head - i] = src.cache[i][np.clip(get_keyframe(i)[1], 0, screenh-1)]
+				graphbg[graphbg_head - i] = src.cache[i][np.clip(get_keyframe(i)[1], 0, srch-1)]
 			graphbg_indices.update(updates)
 		
 		graph = cv2.resize(graphbg, (srcw, graphheight), interpolation=cv2.INTER_NEAREST)
@@ -626,7 +626,7 @@ def load_delta_frame(delta):
 				# update xt
 				if draw_graph:
 					graphbg[graphbg_head - src.index] = \
-						src.cache[src.index][ np.clip(get_keyframe(src.index)[1], 0, screenh-1) ]
+						src.cache[src.index][ np.clip(get_keyframe(src.index)[1], 0, srch-1) ]
 
 	else: # big jump
 		load_this_frame(src.index + delta, bool(tracker))
