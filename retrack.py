@@ -228,15 +228,24 @@ def redraw_display():
 		if use_faces:
 			# faces are in source coordinates and scale
 			if faces_roi is not None:
-				iroi = fix8(faces_roi)
 				cv2.rectangle(source,
-					iroi[0:2], iroi[2:4],
+					fix8(faces_roi[0:2]), fix8(faces_roi[2:4]),
 					(0, 0, 255), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 			for face in faces:
-				face = fix8(face)
+				facewh = face[2:4] - face[0:2]
+				fanchor = face[0:2] + facewh * face_anchor
+
+				cv2.polylines(source,
+					fix8([
+						[fanchor + facewh * 0.05, fanchor - facewh * 0.05],
+						[fanchor + facewh * (+1,-1) * 0.05, fanchor - facewh * (+1,-1) * 0.05]
+					]),
+					False,
+					(0, 255, 0), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
+
 				cv2.rectangle(source,
-					face[0:2], face[2:4],
+					fix8(face[0:2]), fix8(face[2:4]),
 					(0, 255, 0), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 		if use_tracker:
@@ -571,31 +580,35 @@ def on_tracker_rect(rect):
 	tracker = MOSSE(curframe_gray, tracker_downscale(rect))
 	set_cursor(tracker_upscale(tracker.pos))
 
-def load_delta_frame(delta):
+def load_delta_frame(tdelta):
 	global redraw
-	result = None
+	result = None # True ~ stop
 	
-	if delta in (-1, +1):
-		load_this_frame(src.index + delta, False)
+	if tdelta in (-1, +1):
+		load_this_frame(src.index + tdelta, False)
 		
 		if curframe is not None:
-			(x,y) = (nx,ny) = anchor # in source scale
+			oldanchor = anchor
+			newanchor = anchor.copy()
 
 			if tracker:
-				(dx,dy) = tracker.track(curframe_gray) # dx/dy in tracker scale
+				xydelta = tracker.track(curframe_gray, pos=(anchor * trackerscale)) / trackerscale
 
-				if not tracker.good:
+				if tracker.good:
+					newanchor += xydelta
+				else:
 					result = True # stop
 					print "tracking bad, aborting"
-				else:
-					nx += dx / trackerscale
-					ny += dy / trackerscale
 
 			if use_faces: # and tracker and tracker.good:
 				global faces_roi # will be set
+
 				if tracker:
-					(tx,ty) = np.float32(tracker.size) / trackerscale
-					faces_roi = np.float32([nx - 0.5*tx, ny - 1*ty, nx + 0.5*tx, ny + 0.5*ty])
+					trackersize = np.float32(tracker.size) / trackerscale # from tracker scale to source scale
+					faces_roi = np.hstack([
+						newanchor + trackersize * faces_rel_roi[0:2],
+						newanchor + trackersize * faces_rel_roi[2:4]
+					])
 				else:
 					faces_roi = None
 
@@ -603,38 +616,38 @@ def load_delta_frame(delta):
 				faces = detect_faces(subrect=faces_roi)
 
 				if tracker and tracker.good and len(faces) >= 1:
-					faces.sort(key=lambda face: np.linalg.norm(face[0:2] - anchor))
-					(x0,y0,x1,y1) = faces[0]
-					facedim = np.float32([x1-x0, y1-y0])
-					aface = np.float32([x0, y0]) + face_anchor * facedim
+					faces.sort(key=(lambda face:
+						np.linalg.norm(
+							newanchor - \
+								(face[0:2] + (face[2:4] - face[0:2]) * face_anchor))))
 
-					(nx,ny) = (nx,ny) + face_attract_rate * (aface - (nx,ny))
+					face = faces[0]
+					facesize = face[2:4] - face[0:2]
+					faceanchor = face[0:2] + facesize * face_anchor
 
-					dx = nx - x
-					dy = ny - y
+					newanchor += (faceanchor - newanchor) * face_attract_rate
 
 					redraw = True
 
 			if tracker and tracker.good:
 				# use (dx,dy) from above, possibly updated by face pos
 
-				tracker.adapt(curframe_gray, rate=tracker_adapt_rate, delta=(dx,dy))
+				tracker.adapt(curframe_gray, rate=tracker_adapt_rate, pos=(newanchor * trackerscale))
 
-				tpos = tracker_upscale(tracker.pos)
-				set_cursor(tpos)
+				set_cursor(newanchor)
 
 				# update xt
 				if draw_graph:
 					graphbg[graphbg_head - src.index] = \
-						src.cache[src.index][ np.clip(get_keyframe(src.index)[1], 0, srch-1) ]
+						src.cache[src.index][ np.clip(newanchor[1], 0, srch-1) ]
 
 	else: # big jump
-		load_this_frame(src.index + delta, bool(tracker))
+		load_this_frame(src.index + tdelta, bool(tracker))
 
 	if curframe is None:
 		return True # stop
 
-	if (delta > 0) and (graphbg_head is not None) and (draw_graph):
+	if (tdelta > 0) and (graphbg_head is not None) and (draw_graph):
 		imax = graphbg_head
 		imin = imax - graphslices//2
 		src.cache_range(imin, imax)
@@ -792,7 +805,7 @@ def detect_faces(subrect=None):
 
 	faces = face_cascade.detectMultiScale(
 		image,
-		scaleFactor=1.3, minNeighbors=2, minSize=(facesize,)*2, flags=cv2.CASCADE_SCALE_IMAGE)
+		scaleFactor=1.3, minNeighbors=2, minSize=(facesize, facesize), flags=cv2.CASCADE_SCALE_IMAGE)
 
 	if len(faces) == 0:
 		return []
@@ -815,7 +828,7 @@ draw_input = True
 draw_output = True
 draw_graph = True
 draw_tracker = True
-dispscale = 0.4
+dispscale = 0.5
 
 graphbg = None
 graphbg_head = None
@@ -840,6 +853,7 @@ tracker_rectsel = RectSelector(on_tracker_rect)
 
 use_faces = False
 minfacesize = 30 # for a full region (less if the tracker region is smaller)
+faces_rel_roi = [-0.5, -1.0, +0.5, +0.5]
 faces = []
 faces_roi = None
 face_attract_rate = 0.02
@@ -881,6 +895,9 @@ if __name__ == '__main__':
 
 	if 'face_anchor' in meta:
 		face_anchor = np.float32(meta['face_anchor'])
+
+	if 'faces_rel_roi' in meta:
+		faces_rel_roi = np.float32(meta['faces_rel_roi'])
 
 	assert os.path.exists(meta['source'])
 	srcvid = cv2.VideoCapture(meta['source'])
