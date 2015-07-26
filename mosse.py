@@ -90,7 +90,7 @@ class MOSSE:
     def adapt(self, frame, pos, rate=0.125):
         (w, h) = self.size
         self.pos = (x,y) = pos
-        self.last_img = img = cv2.getRectSubPix(frame, (w, h), self.pos)
+        self.last_img = img = cv2.getRectSubPix(frame, (w, h), (x, y))
         img = self.preprocess(img)
 
         A = cv2.dft(img, flags=cv2.DFT_COMPLEX_OUTPUT)
