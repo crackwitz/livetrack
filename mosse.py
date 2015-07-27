@@ -159,8 +159,8 @@ class MOSSE:
         resp = cv2.idft(C, flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
         h, w = resp.shape
         _, mval, _, (mx, my) = cv2.minMaxLoc(resp)
-        fmx = vertex(mx, *resp[my,mx-1:mx+2])
-        fmy = vertex(my, *resp[my-1:my+2,mx])
+        fmx = vertex(mx, *resp[my,mx-1:mx+2]) if (1 <= mx <= w-1) else mx
+        fmy = vertex(my, *resp[my-1:my+2,mx]) if (1 <= my <= h-1) else my
         #print (mx - w//2, my - h//2), (fmx - w//2, fmy - h//2)
         side_resp = resp.copy()
         cv2.rectangle(side_resp, (mx-5, my-5), (mx+5, my+5), 0, -1)
