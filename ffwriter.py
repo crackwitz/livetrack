@@ -27,10 +27,10 @@ class FFWriter(object):
 			'-y',
 			fname
 		], stdin=subprocess.PIPE) #, stderr=NullFile())
-	
+
 	def isOpened(self):
 		return True
-	
+
 	def write(self, frame):
 		assert frame.dtype == np.uint8
 		assert frame.shape[2] in (3, 4)
