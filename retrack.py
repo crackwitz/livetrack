@@ -20,11 +20,12 @@ from cachingvideoreader import RateChangedVideo
 
 
 class VideoSource(object):
-	def __init__(self, vid, numcache=100, numstep=25):
+	def __init__(self, vid, numcache=100, numstep=25, equalize=False):
 		self.vid = vid
 		self.index = -1 # just for relative addressing
 		self.numcache = numcache
 		self.numstep = numstep
+		self.equalize = equalize
 		self.cache = {} # index -> frame
 		#self.stripes = {} # index -> row
 		self.mru = [] # oldest -> newest
@@ -49,6 +50,10 @@ class VideoSource(object):
 			if i not in self.cache:
 				(rv, frame) = self.vid.retrieve()
 				if rv:
+					if self.equalize:
+						frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+						frame = cv2.equalizeHist(frame)
+						frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 					self.cache[i] = frame
 		
 		self.mru = [i for i in self.mru if i not in requested] + requested
@@ -71,6 +76,10 @@ class VideoSource(object):
 						#print "reading frame {0}".format(i)
 						(rv, frame) = self.vid.read()
 						if rv:
+							if self.equalize:
+								frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+								frame = cv2.equalizeHist(frame)
+								frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 							self.cache[i] = frame
 				
 				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
@@ -84,6 +93,10 @@ class VideoSource(object):
 			#print "reading frame {0}".format(newindex)
 			(rv,frame) = self.vid.read()
 			if rv:
+				if self.equalize:
+					frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+					frame = cv2.equalizeHist(frame)
+					frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 				self.cache[newindex] = frame
 			else:
 				return
@@ -230,7 +243,7 @@ def redraw_display():
 			if faces_roi is not None:
 				cv2.rectangle(source,
 					fix8(faces_roi[0:2]), fix8(faces_roi[2:4]),
-					(0, 0, 255), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
+					(0, 0, 160), thickness=iround(1/dispscale), shift=8, lineType=cv2.LINE_AA)
 
 			for face in faces:
 				facewh = face[2:4] - face[0:2]
@@ -384,7 +397,7 @@ def redraw_display():
 		cv2.imshow("graph", graph)
 
 
-def onmouse(event, x, y, flags, userdata):
+def onmouse_source(event, x, y, flags, userdata):
 	global mousedown, redraw
 	
 	if use_tracker:
@@ -580,11 +593,15 @@ def get_keyframe(index):
 		return np.float32(0.5 + u + alpha * (v-u))
 
 def on_tracker_rect(rect):
-	global tracker, use_tracker
 	print "rect selected:", rect
+	init_tracker(rect)
+
+def init_tracker(rect):
+	global tracker
 	tracker = MOSSE(curframe_gray, tracker_downscale(rect))
 	set_cursor(tracker_upscale(tracker.pos))
-
+	print "tracked initialized"
+	
 def load_delta_frame(tdelta):
 	global redraw
 	result = None # True ~ stop
@@ -692,6 +709,14 @@ def load_this_frame(index=None, update_tracker=True, only_decode=False):
 		print "set tracker to", tracker.pos
 		tracker.pos = tracker_downscale(anchor)
 
+	if abs(delta) > 1 and use_tracker and tracker and (tracker_rectsel.drag_radius is not None):
+		(tx,ty) = anchor
+		(rx, ry) = tracker_rectsel.drag_radius
+		if rx > 0 and ry > 0:
+			print "resetting tracker"
+			newrect = (tx-rx, ty-ry, tx+rx, ty+ry)
+			init_tracker(newrect)
+
 	redraw = True
 
 def tracker_upscale(point):
@@ -721,6 +746,7 @@ def dump_video(videodest):
 	if sigma > 0:
 		sigma *= framerate
 		output[:,0] = scipy.ndimage.filters.gaussian_filter(output[:,0], sigma)
+		output[:,1] = scipy.ndimage.filters.gaussian_filter(output[:,1], sigma)
 
 	do_pieces = ('%' in videodest)
 	outseq = 1
@@ -807,6 +833,8 @@ def detect_faces(subrect=None):
 
 		image = image[y0:y1, x0:x1]
 
+	if meta.get('face_flip', False):
+		image = np.fliplr(image)
 
 	faces = face_cascade.detectMultiScale(
 		image,
@@ -814,6 +842,9 @@ def detect_faces(subrect=None):
 
 	if len(faces) == 0:
 		return []
+
+	if meta.get('face_flip', False):
+		faces[:,0] = image.shape[1] - faces[:,0] - faces[:,2]
 
 	if subrect is not None:
 		faces[:,0:2] += (x0,y0)
@@ -823,11 +854,6 @@ def detect_faces(subrect=None):
 	faces *= (1 / trackerscale)
 
 	return list(faces)
-
-face_cascade = cv2.CascadeClassifier(
-	os.path.join(
-		os.getenv('OPENCV_DIR'),
-		"../sources/data/haarcascades/haarcascade_frontalface_alt.xml"))
 
 draw_input = True
 draw_output = True
@@ -885,12 +911,22 @@ if __name__ == '__main__':
 	position = np.float32(meta['position'])
 	anchor = np.float32(meta['anchor'])
 
+	face_cascade = "../sources/data/haarcascades/haarcascade_frontalface_alt.xml"
+
+	if 'face_cascade' in meta:
+		face_cascade = meta['face_cascade']
+
+	face_cascade = cv2.CascadeClassifier(
+		os.path.join(
+			os.getenv('OPENCV_DIR'),
+			face_cascade))
+
 	if 'trackerscale' in meta:
 		trackerscale = float(meta['trackerscale'])
 
 	if 'dispscale' in meta:
 		dispscale = float(meta['dispscale'])
-		tracker_rectsel.scale = dispscale
+		#tracker_rectsel.scale = dispscale
 
 	if 'tracker_adapt_rate' in meta:
 		tracker_adapt_rate = float(meta['tracker_adapt_rate'])
@@ -949,7 +985,10 @@ if __name__ == '__main__':
 		dump_video(videodest)
 		sys.exit(0)
 	
-	src = VideoSource(srcvid, numcache=graphslices+10)
+	src = VideoSource(
+		srcvid,
+		numcache=graphslices+10,
+		equalize=meta.get('equalize', False))
 	
 	if not all(k is None for k in keyframes):
 		lastkey = scan_nonempty(keyframes, len(keyframes)-1, -totalframes)
@@ -969,7 +1008,7 @@ if __name__ == '__main__':
 		cv2.resizeWindow("output", int(screenw*dispscale), int(screenh*dispscale))
 		cv2.resizeWindow("graph", int(srcw*dispscale), graphheight)
 
-		cv2.setMouseCallback("source", onmouse) # keys are handled by all windows
+		cv2.setMouseCallback("source", onmouse_source) # keys are handled by all windows
 		cv2.setMouseCallback("output", onmouse_output) # for seeking
 		cv2.setMouseCallback("graph", onmouse_graph)
 		

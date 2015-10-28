@@ -23,6 +23,8 @@
     1.0
   ],
   "face_attract_rate": 0.02,
+  "face_cascade": "../sources/data/haarcascades/haarcascade_frontalface_alt.xml",
+  "face_flip": false,
   "keyframes": "retrack-keyframes.json", 
   "position": [
     320, 
