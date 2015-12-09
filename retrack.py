@@ -851,7 +851,7 @@ def detect_faces(subrect=None):
 
 	faces[:,2:4] += faces[:,0:2]
 
-	faces *= (1 / trackerscale)
+	faces = faces / trackerscale
 
 	return list(faces)
 
