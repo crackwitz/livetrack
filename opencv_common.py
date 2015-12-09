@@ -29,9 +29,9 @@ class RectSelector:
 					self.drag_radius = (xr, yr)
 			else:
 				rect = self.drag_rect
-				self.drag_center = None
+				#self.drag_center = None
 				self.drag_rect = None
-				self.drag_radius = None
+				#self.drag_radius = None
 				if rect:
 					self.callback(rect)
 	def draw(self, vis):
