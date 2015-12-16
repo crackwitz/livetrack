@@ -65,10 +65,12 @@ class VideoSource(object):
 			do_prefetch = not all(i in self.cache for i in xrange(newindex-1, newindex+1))
 		
 			if do_prefetch:
-				upcoming = range(newindex-self.numstep, newindex+1)
+				imin = max(0, newindex - self.numstep)
+				imax = newindex+1
+				upcoming = range(imin, imax)
+
 				print "prefetching"
-				assert newindex-self.numstep >= 0
-				self.vid.seek(newindex-self.numstep)
+				self.vid.seek(imin)
 				for i in upcoming:
 					if i in self.cache:
 						#print "grabbing frame {0}".format(i)
@@ -172,6 +174,8 @@ VK_SPACE = 32
 
 VK_PGUP = 2162688
 VK_PGDN = 2228224
+VK_POS1 = 2359296
+VK_END = 2293760
 
 def iround(x):
 	return int(round(x))
@@ -869,13 +873,24 @@ def tracker_upscale(point):
 def tracker_downscale(point):
 	return tuple(v * trackerscale for v in point)
 
+def interpolate_nans(arr, goodmask):
+	badmask = ~goodmask
+	arr[badmask] = np.interp(
+		np.flatnonzero(badmask),
+		np.flatnonzero(goodmask),
+		arr[goodmask])
+
 def dump_video(videodest):
 	output = np.zeros((totalframes, 2), dtype=np.float32)
 
 	prevgood = None
 	nextgood = None
-	for i in xrange(totalframes):
-		output[i] = get_keyframe(i)
+
+	output[:] = keyframes['xy']
+	mask = keyframe_is_valid()
+
+	interpolate_nans(output[:,0], mask)
+	interpolate_nans(output[:,1], mask)
 
 	(xmin, xmax) = meta['anchor_x_range']
 	(ymin, ymax) = meta['anchor_y_range']
@@ -1340,6 +1355,11 @@ if __name__ == '__main__':
 
 				redraw = True
 
+			if key == VK_POS1:
+				load_this_frame(0)
+
+			if key == VK_END:
+				load_this_frame(totalframes-1)
 
 	# space -> stop/play
 	# left/right -> frame step
