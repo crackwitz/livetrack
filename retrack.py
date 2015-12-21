@@ -1350,7 +1350,7 @@ if __name__ == '__main__':
 				tracker_rectsel.enabled = use_tracker
 
 				keyframe = keyframes[src.index]
-				if (use_tracker and keyframe['roi'] > 0).all():
+				if use_tracker and (keyframe['roi'] > 0).all():
 					init_tracker(cxwh2rect(keyframe['xy'], keyframe['roi']))
 
 				redraw = True
