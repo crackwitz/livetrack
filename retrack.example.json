@@ -23,7 +23,7 @@
     1.0
   ],
   "face_attract_rate": 0.02,
-  "face_cascade": "../sources/data/haarcascades/haarcascade_frontalface_alt.xml",
+  "face_cascade": "../data/haarcascades/haarcascade_frontalface_alt.xml",
   "face_flip": false,
   "keyframes": "retrack-keyframes.json", 
   "position": [
@@ -36,7 +36,7 @@
     1080
   ], 
   "sigma": 1.0,
-  "source": "input.m2ts", 
+  "source": "input.mov", 
   "trackerscale": 0.5,
   "tracker_adapt_rate": 0.2
 }

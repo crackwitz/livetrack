@@ -29,16 +29,36 @@ class VideoSource(object):
 		#self.stripes = {} # index -> row
 		self.mru = [] # oldest -> newest
 	
-	def cache_range(self, start, stop):
-		if start < 0: start = 0
-		if stop >= totalframes: stop = totalframes-1
-		assert start <= stop
-		requested = range(start, stop+1)
-		requested = [i for i in requested if i not in self.cache]
-		if not requested: return
+	def cache_range(self, start, stop, delta=None):
+		"cache given range, possibly some more context"
+
+		# reversed playback?
+		if delta is not None:
+			if delta < 0:
+				# check if previous 5 frames are ok...
+				do_prefetch = not all(i in self.cache for i in xrange(start-5, start+1))
+				if do_prefetch:
+					start -= self.numstep
+			elif delta > 0:
+				stop += self.numstep
+
+		if start < 0:
+			start = 0
+		if stop >= totalframes:
+			stop = totalframes-1
+
+		assert 0 <= start <= stop < totalframes
+
+		# earlierst+last uncached frame?
+		original_requested = range(start, stop+1)
+		requested = [i for i in original_requested if i not in self.cache]
+		if not requested:
+			return
 		start = min(requested)
 		stop = max(requested)
 		requested = range(start, stop+1)
+
+		# do caching
 		vidpos = self.vid.tell()
 		if start != vidpos:
 			print "cache_range: seeking from {0} to {1}".format(vidpos, start)
@@ -46,9 +66,10 @@ class VideoSource(object):
 			self.vid.seek(start)
 		for i in requested:
 			rv = self.vid.grab()
-			if not rv: continue
+			assert rv
 			if i not in self.cache:
 				(rv, frame) = self.vid.retrieve()
+				assert rv
 				if rv:
 					if self.equalize:
 						frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -56,73 +77,23 @@ class VideoSource(object):
 						frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 					self.cache[i] = frame
 		
-		self.mru = [i for i in self.mru if i not in requested] + requested
-
-	def _prefetch(self, newindex):
-		rel = newindex - self.index
-
-		if rel < 0:
-			do_prefetch = not all(i in self.cache for i in xrange(newindex-1, newindex+1))
-		
-			if do_prefetch:
-				imin = max(0, newindex - self.numstep)
-				imax = newindex+1
-				upcoming = range(imin, imax)
-
-				print "prefetching"
-				self.vid.seek(imin)
-				for i in upcoming:
-					if i in self.cache:
-						#print "grabbing frame {0}".format(i)
-						self.vid.grab()
-					else:
-						#print "reading frame {0}".format(i)
-						(rv, frame) = self.vid.read()
-						if rv:
-							if self.equalize:
-								frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-								frame = cv2.equalizeHist(frame)
-								frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-							self.cache[i] = frame
-				
-				self.mru = [i for i in self.mru if i not in upcoming] + upcoming
-		
-		if newindex not in self.cache:
-			vidpos = self.vid.tell()
-			if vidpos != newindex:
-				print "seeking to {0}".format(newindex)
-				assert newindex >= 0
-				self.vid.seek(newindex)
-			
-			#print "reading frame {0}".format(newindex)
-			(rv,frame) = self.vid.read()
-			if rv:
-				if self.equalize:
-					frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-					frame = cv2.equalizeHist(frame)
-					frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-				self.cache[newindex] = frame
-			else:
-				return
-			
-		self.mru = [i for i in self.mru if i != newindex] + [newindex]
-			
+		self.mru = [i for i in self.mru if i not in original_requested] + original_requested
 		self.mru = self.mru[-self.numcache:]
 		self.cache = { i: frame for i,frame in self.cache.iteritems() if i in self.mru }
-		#self.stripes = {i: self.stripes[i] for i in self.mru}
-			
+
 	def read(self, newindex=None):
 		if newindex is None:
 			newindex = self.index + 1
 
+		delta = newindex - self.index
+
 		if not (0 <= newindex < totalframes):
 			return None
 
-		self._prefetch(newindex)
+		self.cache_range(newindex, newindex)
+		assert newindex in self.cache
+
 		self.index = newindex
-		
-		if self.index not in self.cache:
-			return None
 		
 		return self.cache[self.index]
 
@@ -822,20 +793,20 @@ def load_delta_frame(tdelta):
 def load_this_frame(index=None, update_tracker=True, only_decode=False):
 	global curframe, curframe_gray, redraw, anchor
 	
-	if index is not None:
-		pass
-	else:
+	if index is None:
 		index = src.index
+
+	if index < 0:
+		index = 0
+	if index >= totalframes:
+		index = totalframes-1
 	
-	if not (0 <= index < totalframes):
-		curframe = None
-		return
+	assert 0 <= index < totalframes
 
 	delta = index - src.index
 
 	curframe = src.read(index) # sets src.index
-	if curframe is None:
-		return
+	assert curframe is not None
 
 	if not only_decode:
 		curframe_gray = cv2.resize(
@@ -1070,15 +1041,16 @@ if __name__ == '__main__':
 	position = np.float32(meta['position'])
 	anchor = np.float32(meta['anchor'])
 
-	face_cascade = "../sources/data/haarcascades/haarcascade_frontalface_alt.xml"
+	face_cascade = "../sources/haarcascades/haarcascade_frontalface_alt.xml"
 
 	if 'face_cascade' in meta:
 		face_cascade = meta['face_cascade']
 
-	face_cascade = cv2.CascadeClassifier(
-		os.path.join(
-			os.getenv('OPENCV_DIR'),
-			face_cascade))
+	face_cascade = os.path.join(
+		os.getenv('OPENCV_DIR'),
+		face_cascade)
+	assert os.path.exists(face_cascade)
+	face_cascade = cv2.CascadeClassifier(face_cascade)
 
 	if 'trackerscale' in meta:
 		trackerscale = float(meta['trackerscale'])
@@ -1103,6 +1075,10 @@ if __name__ == '__main__':
 		os.path.dirname(metafile),
 		meta['source'])
 	assert os.path.exists(sourcepath)
+
+	if sourcepath.lower().endswith(('.m2ts', '.mts')):
+		print "WARNING: frame-accurate seeking may not work!"
+
 	srcvid = cv2.VideoCapture(sourcepath)
 	assert srcvid.isOpened()
 	
@@ -1117,10 +1093,12 @@ if __name__ == '__main__':
 	decimate = 1
 	while framerate / decimate > 30:
 		decimate += 1
-	srcvid = RateChangedVideo(srcvid, decimate=decimate)
-	
+
+	if decimate != 1:
+		print "Rate Changed: {} to {}".format(framerate, framerate / decimate)
+
+	srcvid = RateChangedVideo(srcvid, decimate=decimate) # provides tell/seek
 	framerate /= decimate
-	
 	totalframes //= decimate
 	totalframes -= (decimate > 1) # shouldn't be needed... debug?
 
@@ -1144,12 +1122,11 @@ if __name__ == '__main__':
 		numcache=graphslices+10,
 		equalize=meta.get('equalize', False))
 	
+	load_this_frame(0) # apparently needed, or else opencv loses alignment
 	# jump to last keyframe, or not
 	if keyframe_is_valid().any():
 		lastkey = scan_nonempty(totalframes-1, -totalframes)
 		load_this_frame(lastkey)
-	else:
-		load_this_frame(0)
 
 	print "frame", src.index
 	
